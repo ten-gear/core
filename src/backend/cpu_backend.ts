@@ -38,6 +38,15 @@ function indexToPosition(index: number[], stride: Stride): number {
     return position;
 }
 
+function contiguous(shape: Shape, stride: Stride): boolean {
+    let expected = 1;
+    for (let i = shape.length - 1; i >= 0; i--) {
+        if (shape[i]! > 1 && stride[i] !== expected) return false;
+        expected *= shape[i]!;
+    }
+    return true;
+}
+
 function leadingOffset(index: number[], stride: Stride, count: number): number {
     let position = 0;
     for (let i = 0; i < count; i++) position += index[i]! * stride[i]!;
@@ -258,6 +267,79 @@ export class CpuBackend implements DeviceBackend {
             const gradPos = indexToPosition(gradIndex, gradStride);
             gradIndex[dim] = Math.trunc(index[indexToPosition(gradIndex, indiciesStride)]!);
             destination[indexToPosition(gradIndex, outStride)]! += gradient[gradPos]!;
+        }
+    }
+
+    embedding(out: BackendStorage, outShape: Shape, outStride: Stride,
+        indicies: BackendStorage, indiciesShape: Shape, indiciesStride: Stride,
+        table: BackendStorage, tableShape: Shape, tableStride: Stride,
+        features: number): void {
+        const destination = host(out), index = host(indicies), rows = host(table);
+        if (tableShape.length !== 2)
+            throw new Error('embedding received table with dimensions not equal to 2, received: ' + tableShape.length);
+        if (indiciesShape.length + 1 !== outShape.length)
+            throw new Error('embedding received indicies/out with bad dimensions, received indicies.rank: ' + indiciesShape.length + ', out.rank: ' + outShape.length);
+        for (let i = 0; i < indiciesShape.length; i++) {
+            if (indiciesShape[i] !== outShape[i])
+                throw new Error('embedding received indicies/out with bad shapes');
+        }
+        if (tableShape[1] !== features || outShape[outShape.length - 1] !== features)
+            throw new Error('embedding received out with bad shape, last element of out.shape must equal features');
+
+        const size = outShape.reduce((total, dimSize) => total * dimSize, 1);
+        if (size === 0) return;
+        if (contiguous(outShape, outStride) && contiguous(indiciesShape, indiciesStride) && contiguous(tableShape, tableStride)) {
+            for (let ordinal = 0; ordinal < size; ordinal++) {
+                const row = Math.trunc(ordinal / features);
+                const col = ordinal % features;
+                destination[ordinal] = rows[Math.trunc(index[row]!) * features + col];
+            }
+            return;
+        }
+
+        const outIndex = new Array<number>(outShape.length);
+        for (let ordinal = 0; ordinal < size; ordinal++) {
+            positionToIndex(ordinal, outShape, outIndex);
+            const token = Math.trunc(index[leadingOffset(outIndex, indiciesStride, indiciesShape.length)]!);
+            const feature = outIndex[outShape.length - 1]!;
+            destination[indexToPosition(outIndex, outStride)] = rows[token * tableStride[0]! + feature * tableStride[1]!];
+        }
+    }
+
+    embeddingBackward(table: BackendStorage, tableShape: Shape, tableStride: Stride,
+        indicies: BackendStorage, indiciesShape: Shape, indiciesStride: Stride,
+        grad: BackendStorage, gradShape: Shape, gradStride: Stride,
+        features: number): void {
+        const rows = host(table), index = host(indicies), gradient = host(grad);
+        if (tableShape.length !== 2)
+            throw new Error('embeddingBackward received table with dimensions not equal to 2, received: ' + tableShape.length);
+        if (indiciesShape.length + 1 !== gradShape.length)
+            throw new Error('embeddingBackward received indicies/grad with bad dimensions, received indicies.rank: ' + indiciesShape.length + ', grad.rank: ' + gradShape.length);
+        for (let i = 0; i < indiciesShape.length; i++) {
+            if (indiciesShape[i] !== gradShape[i])
+                throw new Error('embeddingBackward received indicies/grad with bad shapes');
+        }
+        if (tableShape[1] !== features || gradShape[gradShape.length - 1] !== features)
+            throw new Error('embeddingBackward received grad with bad shape, last element of grad.shape must equal features');
+
+        const size = gradShape.reduce((total, dimSize) => total * dimSize, 1);
+        if (size === 0) return;
+        if (contiguous(gradShape, gradStride) && contiguous(indiciesShape, indiciesStride) && contiguous(tableShape, tableStride)) {
+            for (let ordinal = 0; ordinal < size; ordinal++) {
+                const row = Math.trunc(ordinal / features);
+                const col = ordinal % features;
+                rows[Math.trunc(index[row]!) * features + col]! += gradient[ordinal]!;
+            }
+            return;
+        }
+
+        const gradIndex = new Array<number>(gradShape.length);
+        for (let ordinal = 0; ordinal < size; ordinal++) {
+            positionToIndex(ordinal, gradShape, gradIndex);
+            const gradPos = indexToPosition(gradIndex, gradStride);
+            const token = Math.trunc(index[leadingOffset(gradIndex, indiciesStride, indiciesShape.length)]!);
+            const feature = gradIndex[gradShape.length - 1]!;
+            rows[token * tableStride[0]! + feature * tableStride[1]!]! += gradient[gradPos]!;
         }
     }
 }

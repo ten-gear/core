@@ -61,6 +61,7 @@ add_library(tsgrad_native SHARED
     src/cpu/optim.cpp
     src/cpu/gather.cpp
     src/cpu/scatter.cpp
+    src/cpu/embedding.cpp
 )
 
 # native.ts loads this exact file. Per-config output dirs are set so Visual Studio
@@ -124,6 +125,7 @@ if(TSGRAD_CUDA)
             src/cuda/optim.cu
             src/cuda/gather.cu
             src/cuda/scatter.cu
+            src/cuda/embedding.cu
         )
         set_target_properties(tsgrad_native PROPERTIES CUDA_ARCHITECTURES native)
         target_link_libraries(tsgrad_native PRIVATE CUDA::cudart CUDA::cublas)

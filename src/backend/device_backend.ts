@@ -78,4 +78,16 @@ export interface DeviceBackend {
         grad: BackendStorage, gradShape: Shape, gradStride: Stride,
         dim: number,
     ) => void;
+    embedding: (
+        out: BackendStorage, outShape: Shape, outStride: Stride,
+        indicies: BackendStorage, indiciesShape: Shape, indiciesStride: Stride,
+        table: BackendStorage, tableShape: Shape, tableStride: Stride,
+        features: number,
+    ) => void;
+    embeddingBackward: (
+        table: BackendStorage, tableShape: Shape, tableStride: Stride,
+        indicies: BackendStorage, indiciesShape: Shape, indiciesStride: Stride,
+        grad: BackendStorage, gradShape: Shape, gradStride: Stride,
+        features: number,
+    ) => void;
 }

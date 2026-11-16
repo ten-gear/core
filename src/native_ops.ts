@@ -100,6 +100,24 @@ export function tensorScatter(
     getBackend().scatter(out, outShape, outStride, indicies, indiciesShape, indiciesStride, grad, gradShape, gradStride, dim);
 }
 
+export function tensorEmbedding(
+    out: TensorBuffer, outShape: Shape, outStride: Stride,
+    indicies: TensorBuffer, indiciesShape: Shape, indiciesStride: Stride,
+    table: TensorBuffer, tableShape: Shape, tableStride: Stride,
+    features: number,
+): void {
+    getBackend().embedding(out, outShape, outStride, indicies, indiciesShape, indiciesStride, table, tableShape, tableStride, features);
+}
+
+export function tensorEmbeddingBackward(
+    table: TensorBuffer, tableShape: Shape, tableStride: Stride,
+    indicies: TensorBuffer, indiciesShape: Shape, indiciesStride: Stride,
+    grad: TensorBuffer, gradShape: Shape, gradStride: Stride,
+    features: number,
+): void {
+    getBackend().embeddingBackward(table, tableShape, tableStride, indicies, indiciesShape, indiciesStride, grad, gradShape, gradStride, features);
+}
+
 export function tensorGather(
     out: TensorBuffer, outShape: Shape, outStride: Stride,
     indicies: TensorBuffer, indiciesShape: Shape, indiciesStride: Stride,

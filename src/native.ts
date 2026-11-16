@@ -82,6 +82,18 @@ export type NativeAddon = {
         grad: NativeStorage, gradShape: Shape, gradStride: Stride,
         dim: number,
     ) => void;
+    embedding: (
+        out: NativeStorage, outShape: Shape, outStride: Stride,
+        indicies: NativeStorage, indiciesShape: Shape, indiciesStride: Stride,
+        table: NativeStorage, tableShape: Shape, tableStride: Stride,
+        features: number,
+    ) => void;
+    embeddingBackward: (
+        table: NativeStorage, tableShape: Shape, tableStride: Stride,
+        indicies: NativeStorage, indiciesShape: Shape, indiciesStride: Stride,
+        grad: NativeStorage, gradShape: Shape, gradStride: Stride,
+        features: number,
+    ) => void;
 };
 
 // Set by initBackend(). Keeping this named export preserves the low-level

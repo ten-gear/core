@@ -5,7 +5,7 @@ import * as operators from "./operators.js";
 // swap out if wanted, tensor_ops has non-multithreaded, the fastTensor stuff is multithreaded
 //import { tensorMap, tensorZip, tensorReduce } from "./tensor_ops.js";
 //import {/*fastTensorMap as tensorMap, fastTensorZip as tensorZip, fastTensorReduce as tensorReduce, fastMatMul as matMul,*/ fastConv1d as tensorConv1d, fastConv2d as tensorConv2d} from "./fast_ops.js";
-import {tensorMap, tensorZip, tensorReduce, matMul, tensorConv1d, tensorConv2d, tensorGather, tensorScatter } from "./native_ops.js"
+import {tensorMap, tensorZip, tensorReduce, matMul, tensorConv1d, tensorConv2d, tensorGather, tensorScatter, tensorEmbedding, tensorEmbeddingBackward } from "./native_ops.js"
 import { randomFloat } from "./helperfunctions.js";
 
 export function neg(a: TensorData): TensorData{
@@ -216,6 +216,25 @@ export function gather(indicies: TensorData, values: TensorData, dim: number): T
 export function scatter(out: TensorData, indicies: TensorData, grad: TensorData, dim: number): TensorData{
     tensorScatter(out._storage, out._shape, out._stride, indicies._storage, indicies._shape, indicies._stride, grad._storage, grad._shape, grad._stride, dim);
     return out;
+}
+
+// out[*indicies.shape, table.shape[1]] = table[indicies, :]. table is [vocabulary, features].
+export function embedding(indicies: TensorData, table: TensorData): TensorData{
+    if (table._shape.length !== 2)
+        throw "embedding received table with dimensions not equal to 2, received: " + table._shape.length;
+    const features = table._shape[1]!;
+    const out = TensorData.empty([...indicies.shape, features]);
+    tensorEmbedding(out._storage, out._shape, out._stride, indicies._storage, indicies._shape, indicies._stride, table._storage, table._shape, table._stride, features);
+    return out;
+}
+
+// table[indicies, :] += grad. grad is [*indicies.shape, features]. Adds into the values already in table.
+export function embeddingBackward(table: TensorData, indicies: TensorData, grad: TensorData): TensorData{
+    if (table._shape.length !== 2)
+        throw "embeddingBackward received table with dimensions not equal to 2, received: " + table._shape.length;
+    const features = table._shape[1]!;
+    tensorEmbeddingBackward(table._storage, table._shape, table._stride, indicies._storage, indicies._shape, indicies._stride, grad._storage, grad._shape, grad._stride, features);
+    return table;
 }
 
 export abstract class TensorFunction{
@@ -507,6 +526,19 @@ export class Conv2d extends TensorFunction{
 
         // derivative of input, then weight
         return [new Tensor(conv2d(gradOutput.data, weight.permute(1, 0, 2, 3).data, true)), new Tensor(conv2d(input.permute(1, 0, 2, 3).data, gradOutput.permute(1, 0, 2, 3).data, false, weight.shape()[2], weight.shape()[3])).permute(1, 0, 2, 3).tocontiguous()];
+    }
+}
+
+export class Embedding extends TensorFunction{
+    static forward(ctx: Context, indicies: Tensor, table: Tensor): Tensor{
+        ctx.saveForBackward(indicies, table);
+        return new Tensor(embedding(indicies.data, table.data));
+    }
+
+    static backward(ctx: Context, gradOutput: Tensor): Tensor[]{
+        const [indicies, table] = ctx.savedValues;
+        const gradTable = new Tensor(TensorData.fill(table.shape(), 0));
+        return [new Tensor(TensorData.fill(indicies.shape(), 0)) , new Tensor(embeddingBackward(gradTable.data, indicies.data, gradOutput.data))];
     }
 }
 

@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, test } from 'vitest';
 import { setBackendForTesting } from '../src/backend/index.js';
 import { tryCreateWebGpuBackend, WebGpuBackend } from '../src/backend/webgpu/webgpu_backend.js';
 import { Tensor } from '../src/tensor.js';
-import { conv1d, gather, scatter } from '../src/tensor_functions.js';
+import { conv1d, embedding, embeddingBackward, gather, scatter, tocontiguous } from '../src/tensor_functions.js';
 import { readStorageAsync, TensorData } from '../src/tensor_data.js';
 
 const backend = await tryCreateWebGpuBackend();
@@ -107,6 +107,63 @@ describe.skipIf(!backend)('WebGPU backend', () => {
         const repeated = TensorData.fill([1, 3], 100);
         scatter(repeated, new TensorData(new Float32Array([0, 0]), [1, 2]), new TensorData(new Float32Array([5, 7]), [1, 2]), 1);
         expectClose(await readStorageAsync(repeated._storage), [112, 100, 100]);
+    });
+
+    test('embedding copies rows through a strided table', async () => {
+        const stored = new TensorData(new Float32Array([
+            0.1, 0.4, 0.7, 1.0, 1.3,
+            0.2, 0.5, 0.8, 1.1, 1.4,
+            0.3, 0.6, 0.9, 1.2, 1.5,
+        ]), [3, 5]);
+        const table = stored.permute(1, 0);
+        const ids = new TensorData(new Float32Array([4, 1, 4]), [3]);
+        const plain = new TensorData(new Float32Array([
+            0.1, 0.2, 0.3,
+            0.4, 0.5, 0.6,
+            0.7, 0.8, 0.9,
+            1.0, 1.1, 1.2,
+            1.3, 1.4, 1.5,
+        ]), [5, 3]);
+        expectClose(await readStorageAsync(embedding(ids, plain)._storage), [
+            1.3, 1.4, 1.5, 0.4, 0.5, 0.6, 1.3, 1.4, 1.5,
+        ]);
+        expectClose(await readStorageAsync(embedding(ids, table)._storage), [
+            1.3, 1.4, 1.5, 0.4, 0.5, 0.6, 1.3, 1.4, 1.5,
+        ]);
+
+        const grid = new TensorData(new Float32Array([4, 1, 4, 2]), [2, 2]);
+        expectClose(await readStorageAsync(embedding(grid.permute(1, 0), table)._storage), [
+            1.3, 1.4, 1.5, 1.3, 1.4, 1.5,
+            0.4, 0.5, 0.6, 0.7, 0.8, 0.9,
+        ]);
+    });
+
+    test('embedding backward adds repeated token rows', async () => {
+        const ids = new TensorData(new Float32Array([4, 1, 4]), [3]);
+        const grad = new TensorData(new Float32Array([
+            1, 2, 3,
+            4, 5, 6,
+            7, 8, 9,
+        ]), [3, 3]);
+        const expected = [
+            0, 0, 0,
+            4, 5, 6,
+            0, 0, 0,
+            0, 0, 0,
+            8, 10, 12,
+        ];
+        const table = new TensorData(new Float32Array(15), [5, 3]);
+        embeddingBackward(table, ids, grad);
+        expectClose(await readStorageAsync(table._storage), expected);
+
+        const viewed = new TensorData(new Float32Array(15), [3, 5]).permute(1, 0);
+        const gradView = new TensorData(new Float32Array([
+            1, 4, 7,
+            2, 5, 8,
+            3, 6, 9,
+        ]), [3, 3]).permute(1, 0);
+        embeddingBackward(viewed, ids, gradView);
+        expectClose(await readStorageAsync(tocontiguous(viewed)._storage), expected);
     });
 
     test('reuses pooled buffers without violating queue order', async () => {

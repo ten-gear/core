@@ -3,7 +3,7 @@ import type {
 } from '../device_backend.js';
 import {
     alignedMapShader, alignedZipShader, CONV1D_SHADER, CONV2D_SHADER, FILL_SHADER,
-    GATHER_SHADER, MATMUL_SHADER, MAX_DIMS, reduceShader, SCATTER_SHADER, SGD_MOMENTUM_SHADER, SGD_SHADER,
+    EMBEDDING_BACKWARD_CONTIGUOUS_SHADER, EMBEDDING_BACKWARD_SHADER, EMBEDDING_CONTIGUOUS_SHADER, EMBEDDING_SHADER, GATHER_SHADER, MATMUL_SHADER, MAX_DIMS, reduceShader, SCATTER_SHADER, SGD_MOMENTUM_SHADER, SGD_SHADER,
     stridedMapShader, stridedZipShader, WORKGROUP_SIZE,
 } from './webgpu_kernels.js';
 import { WebGPUStorage } from './webgpu_storage.js';
@@ -469,6 +469,111 @@ export class WebGpuBackend implements DeviceBackend {
             { binding: 0, resource: { buffer: indicies.buffer } },
             { binding: 1, resource: { buffer: grad.buffer } },
             { binding: 2, resource: { buffer: out.buffer } },
+            { binding: 3, resource: { buffer: params } },
+        ], [Math.ceil(size / WORKGROUP_SIZE)], [params]);
+        copies.forEach(copy => this.release(copy));
+    }
+
+    embedding(outStorage: BackendStorage, outShape: Shape, outStride: Stride,
+        indiciesStorage: BackendStorage, indiciesShape: Shape, indiciesStride: Stride,
+        tableStorage: BackendStorage, tableShape: Shape, tableStride: Stride,
+        features: number): void {
+        const out = gpuStorage(outStorage), indicies = gpuStorage(indiciesStorage), table = gpuStorage(tableStorage);
+        if (tableShape.length !== 2)
+            throw new Error('embedding received table with dimensions not equal to 2, received: ' + tableShape.length);
+        if (indiciesShape.length + 1 !== outShape.length)
+            throw new Error('embedding received indicies/out with bad dimensions, received indicies.rank: ' + indiciesShape.length + ', out.rank: ' + outShape.length);
+        for (let i = 0; i < indiciesShape.length; i++) {
+            if (indiciesShape[i] !== outShape[i])
+                throw new Error('embedding received indicies/out with bad shapes');
+        }
+        if (tableShape[1] !== features || outShape[outShape.length - 1] !== features)
+            throw new Error('embedding received out with bad shape, last element of out.shape must equal features');
+
+        const size = product(outShape);
+        if (size === 0) return;
+        const aligned = contiguous(outShape, outStride) && contiguous(indiciesShape, indiciesStride) && contiguous(tableShape, tableStride);
+        if (aligned) {
+            const params = this.params([size, features], true);
+            this.submit('embedding:contiguous', EMBEDDING_CONTIGUOUS_SHADER, [
+                { binding: 0, resource: { buffer: indicies.buffer } },
+                { binding: 1, resource: { buffer: table.buffer } },
+                { binding: 2, resource: { buffer: out.buffer } },
+                { binding: 3, resource: { buffer: params } },
+            ], [Math.ceil(size / WORKGROUP_SIZE)], [params]);
+            return;
+        }
+        const params = this.params([
+            size, outShape.length, indiciesShape.length, 0,
+            ...this.pad(outShape), ...this.pad(outStride),
+            ...this.pad(indiciesStride), ...this.pad(tableStride),
+        ]);
+        this.submit('embedding', EMBEDDING_SHADER, [
+            { binding: 0, resource: { buffer: indicies.buffer } },
+            { binding: 1, resource: { buffer: table.buffer } },
+            { binding: 2, resource: { buffer: out.buffer } },
+            { binding: 3, resource: { buffer: params } },
+        ], [Math.ceil(size / WORKGROUP_SIZE)], [params]);
+    }
+
+    embeddingBackward(tableStorage: BackendStorage, tableShape: Shape, tableStride: Stride,
+        indiciesStorage: BackendStorage, indiciesShape: Shape, indiciesStride: Stride,
+        gradStorage: BackendStorage, gradShape: Shape, gradStride: Stride,
+        features: number): void {
+        if (tableShape.length !== 2)
+            throw new Error('embeddingBackward received table with dimensions not equal to 2, received: ' + tableShape.length);
+        if (indiciesShape.length + 1 !== gradShape.length)
+            throw new Error('embeddingBackward received indicies/grad with bad dimensions, received indicies.rank: ' + indiciesShape.length + ', grad.rank: ' + gradShape.length);
+        for (let i = 0; i < indiciesShape.length; i++) {
+            if (indiciesShape[i] !== gradShape[i])
+                throw new Error('embeddingBackward received indicies/grad with bad shapes');
+        }
+        if (tableShape[1] !== features || gradShape[gradShape.length - 1] !== features)
+            throw new Error('embeddingBackward received grad with bad shape, last element of grad.shape must equal features');
+
+        const table = gpuStorage(tableStorage);
+        let indicies = gpuStorage(indiciesStorage);
+        let grad = gpuStorage(gradStorage);
+        const copies: WebGPUStorage[] = [];
+        if (table.buffer === indicies.buffer) {
+            const copy = this.empty(indicies.numel);
+            this.copyStorage(indicies, copy);
+            indicies = copy;
+            copies.push(copy);
+        }
+        if (table.buffer === grad.buffer) {
+            const copy = this.empty(grad.numel);
+            this.copyStorage(grad, copy);
+            grad = copy;
+            copies.push(copy);
+        }
+
+        const size = product(gradShape);
+        if (size === 0) {
+            copies.forEach(copy => this.release(copy));
+            return;
+        }
+        const aligned = contiguous(gradShape, gradStride) && contiguous(indiciesShape, indiciesStride) && contiguous(tableShape, tableStride);
+        if (aligned) {
+            const params = this.params([size, features], true);
+            this.submit('embeddingBackward:contiguous', EMBEDDING_BACKWARD_CONTIGUOUS_SHADER, [
+                { binding: 0, resource: { buffer: indicies.buffer } },
+                { binding: 1, resource: { buffer: grad.buffer } },
+                { binding: 2, resource: { buffer: table.buffer } },
+                { binding: 3, resource: { buffer: params } },
+            ], [Math.ceil(size / WORKGROUP_SIZE)], [params]);
+            copies.forEach(copy => this.release(copy));
+            return;
+        }
+        const params = this.params([
+            size, gradShape.length, indiciesShape.length, 0,
+            ...this.pad(gradShape), ...this.pad(gradStride),
+            ...this.pad(indiciesStride), ...this.pad(tableStride),
+        ]);
+        this.submit('embeddingBackward', EMBEDDING_BACKWARD_SHADER, [
+            { binding: 0, resource: { buffer: indicies.buffer } },
+            { binding: 1, resource: { buffer: grad.buffer } },
+            { binding: 2, resource: { buffer: table.buffer } },
             { binding: 3, resource: { buffer: params } },
         ], [Math.ceil(size / WORKGROUP_SIZE)], [params]);
         copies.forEach(copy => this.release(copy));

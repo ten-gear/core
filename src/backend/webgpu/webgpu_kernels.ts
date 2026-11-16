@@ -217,6 +217,94 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     atomic_add_f32(index_position(index, ${4 + MAX_DIMS * 3}u, grad_rank), grad_data[grad_pos]);
 }`;
 
+export const EMBEDDING_CONTIGUOUS_SHADER = `
+@group(0) @binding(0) var<storage, read> indicies_data: array<f32>;
+@group(0) @binding(1) var<storage, read> table_data: array<f32>;
+@group(0) @binding(2) var<storage, read_write> output_data: array<f32>;
+struct Params { size: u32, features: u32 }
+@group(0) @binding(3) var<uniform> p: Params;
+@compute @workgroup_size(${WORKGROUP_SIZE})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+    if (gid.x >= p.size) { return; }
+    let row = gid.x / p.features;
+    let col = gid.x % p.features;
+    let token = u32(i32(indicies_data[row]));
+    output_data[gid.x] = table_data[token * p.features + col];
+}`;
+
+export const EMBEDDING_SHADER = `
+@group(0) @binding(0) var<storage, read> indicies_data: array<f32>;
+@group(0) @binding(1) var<storage, read> table_data: array<f32>;
+@group(0) @binding(2) var<storage, read_write> output_data: array<f32>;
+@group(0) @binding(3) var<storage, read> params: array<u32>;
+${INDEX_HELPERS}
+@compute @workgroup_size(${WORKGROUP_SIZE})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+    if (gid.x >= params[0]) { return; }
+    let out_rank = params[1];
+    let indicies_rank = params[2];
+    var index: array<u32, ${MAX_DIMS}>;
+    to_index(gid.x, 4u, out_rank, &index);
+    let out_pos = index_position(index, ${4 + MAX_DIMS}u, out_rank);
+    let token = i32(indicies_data[index_position(index, ${4 + MAX_DIMS * 2}u, indicies_rank)]);
+    let feature = index[out_rank - 1u];
+    let table_pos = u32(token) * params[${4 + MAX_DIMS * 3}u] + feature * params[${4 + MAX_DIMS * 3 + 1}u];
+    output_data[out_pos] = table_data[table_pos];
+}`;
+
+export const EMBEDDING_BACKWARD_CONTIGUOUS_SHADER = `
+@group(0) @binding(0) var<storage, read> indicies_data: array<f32>;
+@group(0) @binding(1) var<storage, read> grad_data: array<f32>;
+@group(0) @binding(2) var<storage, read_write> table_data: array<atomic<u32>>;
+struct Params { size: u32, features: u32 }
+@group(0) @binding(3) var<uniform> p: Params;
+fn atomic_add_f32(index: u32, add: f32) {
+    var old = atomicLoad(&table_data[index]);
+    loop {
+        let updated = bitcast<u32>(bitcast<f32>(old) + add);
+        let result = atomicCompareExchangeWeak(&table_data[index], old, updated);
+        if result.exchanged { break; }
+        old = result.old_value;
+    }
+}
+@compute @workgroup_size(${WORKGROUP_SIZE})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+    if (gid.x >= p.size) { return; }
+    let row = gid.x / p.features;
+    let col = gid.x % p.features;
+    let token = u32(i32(indicies_data[row]));
+    atomic_add_f32(token * p.features + col, grad_data[gid.x]);
+}`;
+
+export const EMBEDDING_BACKWARD_SHADER = `
+@group(0) @binding(0) var<storage, read> indicies_data: array<f32>;
+@group(0) @binding(1) var<storage, read> grad_data: array<f32>;
+@group(0) @binding(2) var<storage, read_write> table_data: array<atomic<u32>>;
+@group(0) @binding(3) var<storage, read> params: array<u32>;
+${INDEX_HELPERS}
+fn atomic_add_f32(index: u32, add: f32) {
+    var old = atomicLoad(&table_data[index]);
+    loop {
+        let updated = bitcast<u32>(bitcast<f32>(old) + add);
+        let result = atomicCompareExchangeWeak(&table_data[index], old, updated);
+        if result.exchanged { break; }
+        old = result.old_value;
+    }
+}
+@compute @workgroup_size(${WORKGROUP_SIZE})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+    if (gid.x >= params[0]) { return; }
+    let grad_rank = params[1];
+    let indicies_rank = params[2];
+    var index: array<u32, ${MAX_DIMS}>;
+    to_index(gid.x, 4u, grad_rank, &index);
+    let grad_pos = index_position(index, ${4 + MAX_DIMS}u, grad_rank);
+    let token = i32(indicies_data[index_position(index, ${4 + MAX_DIMS * 2}u, indicies_rank)]);
+    let feature = index[grad_rank - 1u];
+    let table_pos = u32(token) * params[${4 + MAX_DIMS * 3}u] + feature * params[${4 + MAX_DIMS * 3 + 1}u];
+    atomic_add_f32(table_pos, grad_data[grad_pos]);
+}`;
+
 export const FILL_SHADER = `
 @group(0) @binding(0) var<storage, read_write> data: array<f32>;
 struct Params { size: u32, value: f32 }

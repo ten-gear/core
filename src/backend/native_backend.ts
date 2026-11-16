@@ -109,4 +109,28 @@ export class NativeBackend implements DeviceBackend {
             dim,
         );
     }
+
+    embedding(out: BackendStorage, outShape: Shape, outStride: Stride,
+        indicies: BackendStorage, indiciesShape: Shape, indiciesStride: Stride,
+        table: BackendStorage, tableShape: Shape, tableStride: Stride,
+        features: number): void {
+        this.addon.embedding(
+            nativeStorage(out), outShape, outStride,
+            nativeStorage(indicies), indiciesShape, indiciesStride,
+            nativeStorage(table), tableShape, tableStride,
+            features,
+        );
+    }
+
+    embeddingBackward(table: BackendStorage, tableShape: Shape, tableStride: Stride,
+        indicies: BackendStorage, indiciesShape: Shape, indiciesStride: Stride,
+        grad: BackendStorage, gradShape: Shape, gradStride: Stride,
+        features: number): void {
+        this.addon.embeddingBackward(
+            nativeStorage(table), tableShape, tableStride,
+            nativeStorage(indicies), indiciesShape, indiciesStride,
+            nativeStorage(grad), gradShape, gradStride,
+            features,
+        );
+    }
 }
