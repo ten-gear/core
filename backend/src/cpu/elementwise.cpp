@@ -86,6 +86,18 @@ void map_relu(const View& out, const View& in) {
     }
 }
 
+void map_gelu(const View& out, const View& in){
+    if constexpr (TSGRAD_HAS_CUDA){
+        cuda::map_gelu(out, in);
+    }
+    else{
+        map_op([](float a) -> float {
+            constexpr float INV_SQRT_2 = 0.70710678118f;
+            return 0.5f * a * (1.0f + std::erf(a * INV_SQRT_2));
+        }, out, in);
+    }
+}
+
 void map_log(const View& out, const View& in) {
     if constexpr (TSGRAD_HAS_CUDA){
         cuda::map_log(out, in);
@@ -101,6 +113,15 @@ void map_exp(const View& out, const View& in) {
     }
     else{
         map_op([](float a) -> float { return std::exp(a); }, out, in);
+    }
+}
+
+void map_sqrt(const View& out, const View& in) {
+    if constexpr (TSGRAD_HAS_CUDA){
+        cuda::map_sqrt(out, in);
+    }
+    else{
+        map_op([](float a) -> float { return std::sqrt(a); }, out, in);
     }
 }
 
@@ -210,6 +231,22 @@ void zip_is_close(const View& out, const View& a, const View& b) {
     }
     else{
         zip_op([](float x, float y) -> float { return std::abs(x - y) < 0.01; }, out, a, b);
+    }
+}
+
+void zip_gelu_backward(const View& out, const View& grad, const View& in) {
+    if constexpr (TSGRAD_HAS_CUDA) {
+        cuda::zip_gelu_backward(out, grad, in);
+    }
+    else {
+        zip_op([](float g, float x) -> float {
+            constexpr float INV_SQRT_2 = 0.70710678118f;
+            constexpr float INV_SQRT_2PI = 0.3989422804014327f;
+            const float cdf = 0.5f * (1.0f + std::erf(x * INV_SQRT_2));
+            const float pdf = INV_SQRT_2PI * std::exp(-0.5f * x * x);
+            
+            return g * (cdf + x * pdf);
+        }, out, grad, in);
     }
 }
 

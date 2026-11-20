@@ -33,7 +33,8 @@ export class NativeBackend implements DeviceBackend {
         input: BackendStorage, inShape: Shape, inStride: Stride): void {
         const fn = {
             neg: this.addon.mapNeg, inv: this.addon.mapInv, sigmoid: this.addon.mapSigmoid,
-            relu: this.addon.mapRelu, log: this.addon.mapLog, exp: this.addon.mapExp, id: this.addon.mapId,
+            relu: this.addon.mapRelu, gelu: this.addon.mapGelu, log: this.addon.mapLog,
+            exp: this.addon.mapExp, sqrt: this.addon.mapSqrt, id: this.addon.mapId,
         }[op];
         fn(nativeStorage(out), outShape, outStride, nativeStorage(input), inShape, inStride);
     }
@@ -44,7 +45,7 @@ export class NativeBackend implements DeviceBackend {
         const fn = {
             add: this.addon.zipAdd, sub: this.addon.zipSub, mul: this.addon.zipMul,
             div: this.addon.zipDiv, lt: this.addon.zipLt, eq: this.addon.zipEq,
-            isClose: this.addon.zipIsClose,
+            isClose: this.addon.zipIsClose, geluBackward: this.addon.zipGeluBackward,
         }[op];
         fn(nativeStorage(out), outShape, outStride, nativeStorage(a), aShape, aStride, nativeStorage(b), bShape, bStride);
     }

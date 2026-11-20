@@ -132,8 +132,10 @@ void map_neg(const View& out, const View& in){ map_op<neg>(out, in); }
 void map_inv(const View& out, const View& in) { map_op<inv>(out, in); }
 void map_sigmoid(const View& out, const View& in) { map_op<sigmoid>(out, in); }
 void map_relu(const View& out, const View& in) { map_op<relu>(out, in); }
+void map_gelu(const View& out, const View& in) { map_op<gelu>(out, in); }
 void map_log(const View& out, const View& in) { map_op<log>(out, in); }
 void map_exp(const View& out, const View& in) { map_op<exp>(out, in); }
+void map_sqrt(const View& out, const View& in) { map_op<sqrt>(out, in); }
 void map_id(const View& out, const View& in) { map_op<id>(out, in); }
 
 template<float (*Func)(float, float)>
@@ -174,6 +176,8 @@ void zip_div(const View& out, const View& a, const View& b) { zip_op<div>(out, a
 void zip_lt(const View& out, const View& a, const View& b) { zip_op<lt>(out, a, b); }
 void zip_eq(const View& out, const View& a, const View& b) { zip_op<eq>(out, a, b); }
 void zip_is_close(const View& out, const View& a, const View& b) { zip_op<is_close>(out, a, b); }
+void zip_gelu_backward(const View& out, const View& grad,const View& in){ zip_op<gelu_backward>(out, grad, in); }
+
 
 template<float (*Func)(float, float)>
 void reduce_op(const View& out, const View& in, int32_t dim, float base){

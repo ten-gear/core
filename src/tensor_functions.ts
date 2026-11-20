@@ -32,6 +32,12 @@ export function relu(a: TensorData): TensorData{
     return out;
 }
 
+export function gelu(a: TensorData): TensorData{
+    const out = TensorData.empty(a.shape);
+    tensorMap(operators.gelu)(out._storage, out._shape, out._stride, a._storage, a._shape, a._stride);
+    return out;
+}
+
 export function log(a: TensorData): TensorData{
     const out = TensorData.empty(a.shape);
     tensorMap(operators.log)(out._storage, out._shape, out._stride, a._storage, a._shape, a._stride);
@@ -41,6 +47,12 @@ export function log(a: TensorData): TensorData{
 export function exp(a: TensorData): TensorData{
     const out = TensorData.empty(a.shape);
     tensorMap(operators.exp)(out._storage, out._shape, out._stride, a._storage, a._shape, a._stride);
+    return out;
+}
+
+export function sqrt(a: TensorData): TensorData{
+    const out = TensorData.empty(a.shape);
+    tensorMap(operators.sqrt)(out._storage, out._shape, out._stride, a._storage, a._shape, a._stride);
     return out;
 }
 
@@ -104,6 +116,17 @@ export function isclose(a: TensorData, b: TensorData): TensorData{
     const outShape = shapeBroadcast(a._shape, b._shape);
     const out = TensorData.empty(outShape);
     tensorZip(operators.isClose)(out._storage, out._shape, out._stride, a._storage, a._shape, a._stride, b._storage, b._shape, b._stride);
+    return out;
+}
+
+export function geluBackward(grad: TensorData, input: TensorData): TensorData{
+    const outShape = shapeBroadcast(grad._shape, input._shape);
+    const out = TensorData.empty(outShape);
+    tensorZip(operators.geluBackward)(
+        out._storage, out._shape, out._stride,
+        grad._storage, grad._shape, grad._stride,
+        input._storage, input._shape, input._stride,
+    );
     return out;
 }
 
@@ -476,6 +499,18 @@ export class ReLU extends TensorFunction{
     }
 }
 
+export class GELU extends TensorFunction{
+    static forward(ctx: Context, a: Tensor): Tensor{
+        const res = new Tensor(gelu(a.data));
+        ctx.saveForBackward(a);
+        return res;
+    }
+    static backward(ctx: Context, gradOutput: Tensor): Tensor[]{
+        const [a] = ctx.savedValues;
+        return [new Tensor(geluBackward(gradOutput.data, a.data))];
+    }
+}
+
 export class Log extends TensorFunction{
     static forward(ctx: Context, a: Tensor): Tensor{
         ctx.saveForBackward(a);
@@ -496,6 +531,18 @@ export class Exp extends TensorFunction{
     static backward(ctx: Context, gradOutput: Tensor): Tensor[]{
         let [res] = ctx.savedValues;
         return [gradOutput.mul(res)];
+    }
+}
+
+export class Sqrt extends TensorFunction{
+    static forward(ctx: Context, a: Tensor): Tensor{
+        const res = new Tensor(sqrt(a.data));
+        ctx.saveForBackward(res);
+        return res;
+    }
+    static backward(ctx: Context, gradOutput: Tensor): Tensor[]{
+        const [res] = ctx.savedValues;
+        return [gradOutput.div(res.mul(2))];
     }
 }
 

@@ -2,8 +2,8 @@ export type Shape = number[];
 export type Stride = number[];
 export type BackendStorage = Float32Array | object;
 export type BackendKind = 'cpu' | 'native-cpu' | 'cuda' | 'webgpu';
-export type UnaryOp = 'neg' | 'inv' | 'sigmoid' | 'relu' | 'log' | 'exp' | 'id';
-export type BinaryOp = 'add' | 'sub' | 'mul' | 'div' | 'lt' | 'eq' | 'isClose';
+export type UnaryOp = 'neg' | 'inv' | 'sigmoid' | 'relu' | 'gelu' | 'log' | 'exp' | 'sqrt' | 'id';
+export type BinaryOp = 'add' | 'sub' | 'mul' | 'div' | 'lt' | 'eq' | 'isClose' | 'geluBackward';
 export type ReduceOp = 'max' | 'sum' | 'prod';
 
 export interface DeviceBackend {

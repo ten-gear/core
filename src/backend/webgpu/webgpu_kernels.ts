@@ -8,8 +8,18 @@ const unaryBody: Record<UnaryOp, string> = {
     inv: 'return 1.0 / x;',
     sigmoid: 'return select(exp(x) / (1.0 + exp(x)), 1.0 / (1.0 + exp(-x)), x >= 0.0);',
     relu: 'return max(x, 0.0);',
+    gelu: `
+        let z = x * 0.70710678118;
+        let abs_z = abs(z);
+        let t = 1.0 / (1.0 + 0.3275911 * abs_z);
+        let erf_abs = 1.0 - (((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t
+            - 0.284496736) * t + 0.254829592) * t * exp(-abs_z * abs_z));
+        let erf_value = select(-erf_abs, erf_abs, z >= 0.0);
+        return 0.5 * x * (1.0 + erf_value);
+    `,
     log: 'return log(x);',
     exp: 'return exp(x);',
+    sqrt: 'return sqrt(x);',
     id: 'return x;',
 };
 
@@ -21,6 +31,17 @@ const binaryBody: Record<BinaryOp, string> = {
     lt: 'return select(0.0, 1.0, a < b);',
     eq: 'return select(0.0, 1.0, a == b);',
     isClose: 'return select(0.0, 1.0, abs(a - b) < 0.01);',
+    geluBackward: `
+        let z = b * 0.70710678118;
+        let abs_z = abs(z);
+        let t = 1.0 / (1.0 + 0.3275911 * abs_z);
+        let erf_abs = 1.0 - (((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t
+            - 0.284496736) * t + 0.254829592) * t * exp(-abs_z * abs_z));
+        let erf_value = select(-erf_abs, erf_abs, z >= 0.0);
+        let cdf = 0.5 * (1.0 + erf_value);
+        let pdf = 0.3989422804014327 * exp(-0.5 * b * b);
+        return a * (cdf + b * pdf);
+    `,
 };
 
 const reduceInfo: Record<ReduceOp, { body: string; identity: string }> = {

@@ -55,8 +55,10 @@ export type NativeAddon = {
     mapInv: MapNative;
     mapSigmoid: MapNative;
     mapRelu: MapNative;
+    mapGelu: MapNative;
     mapLog: MapNative;
     mapExp: MapNative;
+    mapSqrt: MapNative;
     mapId: MapNative;
     zipAdd: ZipNative;
     zipSub: ZipNative;
@@ -65,6 +67,7 @@ export type NativeAddon = {
     zipLt: ZipNative;
     zipEq: ZipNative;
     zipIsClose: ZipNative;
+    zipGeluBackward: ZipNative;
     reduceMax: ReduceNative;
     reduceSum: ReduceNative;
     reduceProd: ReduceNative;

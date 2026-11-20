@@ -50,6 +50,25 @@ export function relu(a: number): number{
     return Math.max(0, a);
 }
 
+// Abramowitz and Stegun 7.1.26, matching erf closely.
+function erf(a: number): number{
+    const sign = a < 0 ? -1 : 1;
+    const absZ = Math.abs(a);
+    const t = 1 / (1 + 0.3275911 * absZ);
+    return sign * (1 - (((((1.061405429 * t - 1.453152027) * t)
+        + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-absZ * absZ));
+}
+
+export function gelu(a: number): number{
+    return 0.5 * a * (1 + erf(a * Math.SQRT1_2));
+}
+
+export function geluBackward(grad: number, input: number): number{
+    const cdf = 0.5 * (1 + erf(input * Math.SQRT1_2));
+    const pdf = Math.exp(-0.5 * input * input) / Math.sqrt(2 * Math.PI);
+    return grad * (cdf + input * pdf);
+}
+
 export function leakyrelu(a: number, alpha: number = 0.01): number{
     if (a > 0)
         return a;
@@ -62,6 +81,10 @@ export function log(a: number): number{
 
 export function exp(a: number): number{
     return Math.exp(a); // e^a
+}
+
+export function sqrt(a: number): number{
+    return Math.sqrt(a);
 }
 
 // reciprocal

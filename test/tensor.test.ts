@@ -530,3 +530,33 @@ test("layernorm backward matches finite differences", () => {
         setBackendForTesting(previous);
     }
 });
+
+test("gelu and sqrt run forward and backward", () => {
+    const previous = getBackend();
+    setBackendForTesting(new CpuBackend());
+    try {
+        const geluInput = new Tensor(new TensorData(new Float32Array([-1, 0, 1, 4]), [4]));
+        geluInput._requiresGrad(true);
+        const geluResult = geluInput.gelu();
+        const geluOutput = readStorage(geluResult.data._storage);
+        [-0.15865525, 0, 0.84134475, 3.9998733].forEach(
+            (value, index) => expect(geluOutput[index]).toBeCloseTo(value, 5),
+        );
+        geluResult.backward();
+        const geluGrad = readStorage(geluInput.grad!.data._storage);
+        const expectedGeluGrad = [-0.08331547, 0.5, 1.08331547, 1.00050365];
+        expectedGeluGrad.forEach((value, index) => expect(geluGrad[index]).toBeCloseTo(value, 4));
+
+        const sqrtInput = new Tensor(new TensorData(new Float32Array([1, 4, 9]), [3]));
+        sqrtInput._requiresGrad(true);
+        const sqrtOutput = sqrtInput.sqrt();
+        expect(Array.from(readStorage(sqrtOutput.data._storage))).toEqual([1, 2, 3]);
+        sqrtOutput.backward();
+        [0.5, 0.25, 1 / 6].forEach(
+            (value, index) => expect(readStorage(sqrtInput.grad!.data._storage)[index]).toBeCloseTo(value),
+        );
+    }
+    finally {
+        setBackendForTesting(previous);
+    }
+});

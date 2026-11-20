@@ -6,12 +6,14 @@ import type {
 
 const unary = {
     neg: operators.neg, inv: operators.inv, sigmoid: operators.sigmoid,
-    relu: operators.relu, log: operators.log, exp: operators.exp, id: operators.id,
+    relu: operators.relu, gelu: operators.gelu, log: operators.log,
+    exp: operators.exp, sqrt: operators.sqrt, id: operators.id,
 } satisfies Record<UnaryOp, (x: number) => number>;
 
 const binary = {
     add: operators.add, sub: operators.sub, mul: operators.mul, div: operators.div,
     lt: operators.lt, eq: operators.eq, isClose: operators.isClose,
+    geluBackward: operators.geluBackward,
 } satisfies Record<BinaryOp, (a: number, b: number) => number>;
 
 const reductions = {

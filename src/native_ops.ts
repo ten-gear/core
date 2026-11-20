@@ -26,8 +26,10 @@ function unaryName(func: (x: number) => number): UnaryOp {
     if (func === operators.inv) return 'inv';
     if (func === operators.sigmoid) return 'sigmoid';
     if (func === operators.relu) return 'relu';
+    if (func === operators.gelu) return 'gelu';
     if (func === operators.log) return 'log';
     if (func === operators.exp) return 'exp';
+    if (func === operators.sqrt) return 'sqrt';
     if (func === operators.id) return 'id';
     throw new Error(`Unsupported unary tensor operator: ${func.name}`);
 }
@@ -46,6 +48,7 @@ function binaryName(func: (x: number, y: number) => number): BinaryOp {
     if (func === operators.lt) return 'lt';
     if (func === operators.eq) return 'eq';
     if (func === operators.isClose) return 'isClose';
+    if (func === operators.geluBackward) return 'geluBackward';
     throw new Error(`Unsupported binary tensor operator: ${func.name}`);
 }
 
