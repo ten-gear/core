@@ -15,6 +15,7 @@ namespace tsgrad::cuda{
         constexpr float INV_SQRT_2 = 0.70710678118f;
         return 0.5f * a * (1.0f + erff(a * INV_SQRT_2)); 
     }
+    __device__ float silu(float a) { return a / (1.0f + expf(-a)); }
 
     __device__ float log(float a){ return logf(a); }
     __device__ float exp(float a){ return expf(a); }
@@ -36,5 +37,9 @@ namespace tsgrad::cuda{
         const float pdf = INV_SQRT_2PI * expf(-0.5f * x * x);
     
         return grad * (cdf + x * pdf);
+    }
+    __device__ float silu_backward(float grad, float x) {
+        const float s = x >= 0 ? 1.0F/(1.0F + expf(-x)) : expf(x) / (1.0F + expf(x));
+        return grad * s * (1.0f + x * (1.0f - s));
     }
 };

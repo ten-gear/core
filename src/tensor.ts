@@ -3,7 +3,7 @@ import { readStorage, readStorageAsync, TensorData, UserShape, Shape } from "./t
 import { getBackend } from "./backend/index.js";
 import { tensorMap, tensorZip } from "./native_ops.js";
 import * as operators from "./operators.js";
-import { Add, TensorFunction, Neg, Mul, Inv, LT, EQ, IsClose, Sigmoid, ReLU, GELU, Log, Exp, Sqrt, Sum, Permute, ToContiguous, View, MatMul, Conv1d, Conv2d, Max, Sub, Div, Gather, Embedding, LayerNorm } from "./tensor_functions.js";
+import { Add, TensorFunction, Neg, Mul, Inv, LT, EQ, IsClose, Sigmoid, ReLU, GELU, SiLU, Log, Exp, Sqrt, Sum, Permute, ToContiguous, View, MatMul, Conv1d, Conv2d, Max, Sub, Div, Gather, Embedding, LayerNorm } from "./tensor_functions.js";
 
 export class History{
     lastFn : typeof TensorFunction | undefined;
@@ -222,6 +222,10 @@ export class Tensor implements Variable{
 
     gelu(): Tensor{
         return Tensor.apply(GELU, this);
+    }
+
+    silu(): Tensor{
+        return Tensor.apply(SiLU, this);
     }
 
     log(): Tensor{

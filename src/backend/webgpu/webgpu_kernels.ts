@@ -17,6 +17,10 @@ const unaryBody: Record<UnaryOp, string> = {
         let erf_value = select(-erf_abs, erf_abs, z >= 0.0);
         return 0.5 * x * (1.0 + erf_value);
     `,
+    silu: `
+        let s = select(exp(x) / (1.0 + exp(x)), 1.0 / (1.0 + exp(-x)), x >= 0.0);
+        return x * s;
+    `,
     log: 'return log(x);',
     exp: 'return exp(x);',
     sqrt: 'return sqrt(x);',
@@ -41,6 +45,10 @@ const binaryBody: Record<BinaryOp, string> = {
         let cdf = 0.5 * (1.0 + erf_value);
         let pdf = 0.3989422804014327 * exp(-0.5 * b * b);
         return a * (cdf + b * pdf);
+    `,
+    siluBackward: `
+        let s = select(exp(b) / (1.0 + exp(b)), 1.0 / (1.0 + exp(-b)), b >= 0.0);
+        return a * s * (1.0 + b * (1.0 - s));
     `,
 };
 

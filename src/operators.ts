@@ -69,6 +69,15 @@ export function geluBackward(grad: number, input: number): number{
     return grad * (cdf + input * pdf);
 }
 
+export function silu(a: number): number{
+    return a * sigmoid(a);
+}
+
+export function siluBackward(grad: number, input: number): number{
+    const s = sigmoid(input);
+    return grad * s * (1 + input * (1 - s));
+}
+
 export function leakyrelu(a: number, alpha: number = 0.01): number{
     if (a > 0)
         return a;

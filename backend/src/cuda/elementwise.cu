@@ -133,6 +133,7 @@ void map_inv(const View& out, const View& in) { map_op<inv>(out, in); }
 void map_sigmoid(const View& out, const View& in) { map_op<sigmoid>(out, in); }
 void map_relu(const View& out, const View& in) { map_op<relu>(out, in); }
 void map_gelu(const View& out, const View& in) { map_op<gelu>(out, in); }
+void map_silu(const View& out, const View& in) { map_op<silu>(out, in); }
 void map_log(const View& out, const View& in) { map_op<log>(out, in); }
 void map_exp(const View& out, const View& in) { map_op<exp>(out, in); }
 void map_sqrt(const View& out, const View& in) { map_op<sqrt>(out, in); }
@@ -177,6 +178,7 @@ void zip_lt(const View& out, const View& a, const View& b) { zip_op<lt>(out, a, 
 void zip_eq(const View& out, const View& a, const View& b) { zip_op<eq>(out, a, b); }
 void zip_is_close(const View& out, const View& a, const View& b) { zip_op<is_close>(out, a, b); }
 void zip_gelu_backward(const View& out, const View& grad,const View& in){ zip_op<gelu_backward>(out, grad, in); }
+void zip_silu_backward(const View& out, const View& grad,const View& in){ zip_op<silu_backward>(out, grad, in); }
 
 
 template<float (*Func)(float, float)>

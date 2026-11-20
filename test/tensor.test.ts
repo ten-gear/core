@@ -547,6 +547,17 @@ test("gelu and sqrt run forward and backward", () => {
         const expectedGeluGrad = [-0.08331547, 0.5, 1.08331547, 1.00050365];
         expectedGeluGrad.forEach((value, index) => expect(geluGrad[index]).toBeCloseTo(value, 4));
 
+        const siluInput = new Tensor(new TensorData(new Float32Array([-1, 0, 1, 4]), [4]));
+        siluInput._requiresGrad(true);
+        const siluResult = siluInput.silu();
+        [-0.26894142, 0, 0.73105858, 3.92805516].forEach(
+            (value, index) => expect(readStorage(siluResult.data._storage)[index]).toBeCloseTo(value),
+        );
+        siluResult.backward();
+        [0.07232949, 0.5, 0.92767051, 1.05266461].forEach(
+            (value, index) => expect(readStorage(siluInput.grad!.data._storage)[index]).toBeCloseTo(value),
+        );
+
         const sqrtInput = new Tensor(new TensorData(new Float32Array([1, 4, 9]), [3]));
         sqrtInput._requiresGrad(true);
         const sqrtOutput = sqrtInput.sqrt();

@@ -675,6 +675,7 @@ Napi::Object init(Napi::Env env, Napi::Object exports) {
     export_map(env, exports, "mapSigmoid", tsgrad::map_sigmoid);
     export_map(env, exports, "mapRelu", tsgrad::map_relu);
     export_map(env, exports, "mapGelu", tsgrad::map_gelu);
+    export_map(env, exports, "mapSilu", tsgrad::map_silu);
     export_map(env, exports, "mapLog", tsgrad::map_log);
     export_map(env, exports, "mapExp", tsgrad::map_exp);
     export_map(env, exports, "mapSqrt", tsgrad::map_sqrt);
@@ -688,6 +689,7 @@ Napi::Object init(Napi::Env env, Napi::Object exports) {
     export_zip(env, exports, "zipEq", tsgrad::zip_eq);
     export_zip(env, exports, "zipIsClose", tsgrad::zip_is_close);
     export_zip(env, exports, "zipGeluBackward", tsgrad::zip_gelu_backward);
+    export_zip(env, exports, "zipSiluBackward", tsgrad::zip_silu_backward);
 
     export_reduce(env, exports, "reduceMax", tsgrad::reduce_max);
     export_reduce(env, exports, "reduceSum", tsgrad::reduce_sum);

@@ -30,6 +30,7 @@ void map_inv(const View& out, const View& in);
 void map_sigmoid(const View& out, const View& in); // stable split at 0, same as operators.sigmoid
 void map_relu(const View& out, const View& in);
 void map_gelu(const View& out, const View& in);
+void map_silu(const View& out, const View& in);
 void map_log(const View& out, const View& in);
 void map_exp(const View& out, const View& in);
 void map_sqrt(const View& out, const View& in);
@@ -45,6 +46,7 @@ void zip_lt(const View& out, const View& a, const View& b);
 void zip_eq(const View& out, const View& a, const View& b);
 void zip_is_close(const View& out, const View& a, const View& b);
 void zip_gelu_backward(const View& out, const View& grad, const View& in);
+void zip_silu_backward(const View& out, const View& grad, const View& in);
 
 // param and grad are the same shape. Both are updated through param's data.
 void sgd(const View& param, const View& grad, float lr);
@@ -125,6 +127,7 @@ void map_inv(const View& out, const View& in);
 void map_sigmoid(const View& out, const View& in);
 void map_relu(const View& out, const View& in);
 void map_gelu(const View& out, const View& in);
+void map_silu(const View& out, const View& in);
 void map_log(const View& out, const View& in);
 void map_exp(const View& out, const View& in);
 void map_sqrt(const View& out, const View& in);
@@ -138,6 +141,7 @@ void zip_lt(const View& out, const View& a, const View& b);
 void zip_eq(const View& out, const View& a, const View& b);
 void zip_is_close(const View& out, const View& a, const View& b);
 void zip_gelu_backward(const View& out, const View& grad, const View& in);
+void zip_silu_backward(const View& out, const View& grad, const View& in);
 
 void sgd(const View& param, const View& grad, float lr);
 void sgd_momentum(const View& param, const View& grad, const View& velocity, float lr, float beta);

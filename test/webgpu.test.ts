@@ -33,6 +33,7 @@ describe.skipIf(!backend)('WebGPU backend', () => {
         expectClose(await a.neg().exp().toFloat32(), [Math.exp(-1), Math.exp(-2), Math.exp(-3), Math.exp(-4)]);
         expectClose(await a.sigmoid().toFloat32(), [0.7310586, 0.880797, 0.952574, 0.982014]);
         expectClose(await a.gelu().toFloat32(), [0.8413447, 1.9544997, 2.9959503, 3.9998733]);
+        expectClose(await a.silu().toFloat32(), [0.7310586, 1.7615942, 2.8577224, 3.9280552]);
         expectClose(await a.sqrt().toFloat32(), [1, Math.sqrt(2), Math.sqrt(3), 2]);
         expectClose(await a.sub(2).div(2).toFloat32(), [-0.5, 0, 0.5, 1]);
         expectClose(await a.lt(3).toFloat32(), [1, 1, 0, 0]);
@@ -43,6 +44,11 @@ describe.skipIf(!backend)('WebGPU backend', () => {
         geluInput._requiresGrad(true);
         geluInput.gelu().backward();
         expectClose(await geluInput.grad!.toFloat32(), [-0.08331547, 0.5, 1.08331547, 1.00050365]);
+
+        const siluInput = new Tensor(new TensorData(new Float32Array([-1, 0, 1, 4]), [4]));
+        siluInput._requiresGrad(true);
+        siluInput.silu().backward();
+        expectClose(await siluInput.grad!.toFloat32(), [0.07232949, 0.5, 0.92767051, 1.05266461]);
     });
 
     test('runs tiled matmul and convolution', async () => {
