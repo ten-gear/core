@@ -65,6 +65,17 @@ function rowOffset(row: number, shape: Shape, stride: Stride): number {
     return position;
 }
 
+function sliceOffset(row: number, shape: Shape, stride: Stride, dim: number): number {
+    let position = 0;
+    for (let axis = shape.length - 1; axis >= 0; axis--) {
+        if (axis === dim) continue;
+        const index = row % shape[axis]!;
+        row = Math.trunc(row / shape[axis]!);
+        position += index * stride[axis]!;
+    }
+    return position;
+}
+
 function sameShape(a: Shape, b: Shape): boolean {
     return a.length === b.length && a.every((value, index) => value === b[index]);
 }
@@ -83,6 +94,14 @@ function layernormDimensions(
     if (meanShape[0] !== rows || invStdShape[0] !== rows)
         throw new Error('layernorm saved-stat shape mismatch');
     return [rows, features];
+}
+
+function softmaxDimensions(shape: Shape, dim: number, operation: string): [number, number] {
+    if (shape.length < 1) throw new Error(`${operation} expects an input with rank at least 1`);
+    if (dim < 0 || dim >= shape.length) throw new Error(`${operation} received dim outside the input rank`);
+    const dimSize = shape[dim]!;
+    if (dimSize <= 0) throw new Error(`${operation} requires a non-empty normalized dimension`);
+    return [shape.reduce((size, value) => size * value, 1) / dimSize, dimSize];
 }
 
 export class CpuBackend implements DeviceBackend {
@@ -478,5 +497,99 @@ export class CpuBackend implements DeviceBackend {
             dGamma[col * gradGammaStride[0]!] = gammaSum;
             dBeta[col * gradBetaStride[0]!] = betaSum;
         }
+    }
+
+    private softmaxForward(logarithmic: boolean,
+        out: BackendStorage, outShape: Shape, outStride: Stride,
+        input: BackendStorage, inShape: Shape, inStride: Stride,
+        dim: number, operation: string): void {
+        if (!sameShape(outShape, inShape)) throw new Error(`${operation} input/output shape mismatch`);
+        const [rows, dimSize] = softmaxDimensions(inShape, dim, operation);
+        const output = host(out), x = host(input);
+        for (let row = 0; row < rows; row++) {
+            const outBase = sliceOffset(row, outShape, outStride, dim);
+            const inputBase = sliceOffset(row, inShape, inStride, dim);
+            let maximum = -Infinity;
+            for (let col = 0; col < dimSize; col++)
+                maximum = Math.max(maximum, x[inputBase + col * inStride[dim]!]!);
+            let sumExp = 0;
+            for (let col = 0; col < dimSize; col++)
+                sumExp += Math.exp(x[inputBase + col * inStride[dim]!]! - maximum);
+
+            if (logarithmic) {
+                const logSumExp = maximum + Math.log(sumExp);
+                for (let col = 0; col < dimSize; col++)
+                    output[outBase + col * outStride[dim]!] =
+                        x[inputBase + col * inStride[dim]!]! - logSumExp;
+            } else {
+                for (let col = 0; col < dimSize; col++)
+                    output[outBase + col * outStride[dim]!] =
+                        Math.exp(x[inputBase + col * inStride[dim]!]! - maximum) / sumExp;
+            }
+        }
+    }
+
+    softmax(out: BackendStorage, outShape: Shape, outStride: Stride,
+        input: BackendStorage, inShape: Shape, inStride: Stride, dim: number): void {
+        this.softmaxForward(false, out, outShape, outStride, input, inShape, inStride, dim, 'softmax');
+    }
+
+    logSoftmax(out: BackendStorage, outShape: Shape, outStride: Stride,
+        input: BackendStorage, inShape: Shape, inStride: Stride, dim: number): void {
+        this.softmaxForward(true, out, outShape, outStride, input, inShape, inStride, dim, 'logSoftmax');
+    }
+
+    private softmaxBackwardImpl(logarithmic: boolean,
+        gradInput: BackendStorage, gradInputShape: Shape, gradInputStride: Stride,
+        gradOutput: BackendStorage, gradOutputShape: Shape, gradOutputStride: Stride,
+        out: BackendStorage, outShape: Shape, outStride: Stride,
+        dim: number, operation: string): void {
+        if (!sameShape(gradInputShape, outShape) || !sameShape(gradOutputShape, outShape))
+            throw new Error(`${operation} gradient shape mismatch`);
+        const [rows, dimSize] = softmaxDimensions(outShape, dim, operation);
+        const dx = host(gradInput), dy = host(gradOutput), y = host(out);
+        for (let row = 0; row < rows; row++) {
+            const dxBase = sliceOffset(row, gradInputShape, gradInputStride, dim);
+            const dyBase = sliceOffset(row, gradOutputShape, gradOutputStride, dim);
+            const outBase = sliceOffset(row, outShape, outStride, dim);
+            let reduced = 0;
+            for (let col = 0; col < dimSize; col++) {
+                const gradient = dy[dyBase + col * gradOutputStride[dim]!]!;
+                reduced += logarithmic
+                    ? gradient
+                    : gradient * y[outBase + col * outStride[dim]!]!;
+            }
+            for (let col = 0; col < dimSize; col++) {
+                const gradient = dy[dyBase + col * gradOutputStride[dim]!]!;
+                const value = y[outBase + col * outStride[dim]!]!;
+                dx[dxBase + col * gradInputStride[dim]!] = logarithmic
+                    ? gradient - Math.exp(value) * reduced
+                    : value * (gradient - reduced);
+            }
+        }
+    }
+
+    softmaxBackward(
+        gradInput: BackendStorage, gradInputShape: Shape, gradInputStride: Stride,
+        gradOutput: BackendStorage, gradOutputShape: Shape, gradOutputStride: Stride,
+        out: BackendStorage, outShape: Shape, outStride: Stride, dim: number,
+    ): void {
+        this.softmaxBackwardImpl(
+            false, gradInput, gradInputShape, gradInputStride,
+            gradOutput, gradOutputShape, gradOutputStride,
+            out, outShape, outStride, dim, 'softmaxBackward',
+        );
+    }
+
+    logSoftmaxBackward(
+        gradInput: BackendStorage, gradInputShape: Shape, gradInputStride: Stride,
+        gradOutput: BackendStorage, gradOutputShape: Shape, gradOutputStride: Stride,
+        out: BackendStorage, outShape: Shape, outStride: Stride, dim: number,
+    ): void {
+        this.softmaxBackwardImpl(
+            true, gradInput, gradInputShape, gradInputStride,
+            gradOutput, gradOutputShape, gradOutputStride,
+            out, outShape, outStride, dim, 'logSoftmaxBackward',
+        );
     }
 }

@@ -5,7 +5,7 @@ import * as operators from "./operators.js";
 // swap out if wanted, tensor_ops has non-multithreaded, the fastTensor stuff is multithreaded
 //import { tensorMap, tensorZip, tensorReduce } from "./tensor_ops.js";
 //import {/*fastTensorMap as tensorMap, fastTensorZip as tensorZip, fastTensorReduce as tensorReduce, fastMatMul as matMul,*/ fastConv1d as tensorConv1d, fastConv2d as tensorConv2d} from "./fast_ops.js";
-import {tensorMap, tensorZip, tensorReduce, matMul, tensorConv1d, tensorConv2d, tensorGather, tensorScatter, tensorEmbedding, tensorEmbeddingBackward, tensorLayerNorm, tensorLayerNormBackward } from "./native_ops.js"
+import {tensorMap, tensorZip, tensorReduce, matMul, tensorConv1d, tensorConv2d, tensorGather, tensorScatter, tensorEmbedding, tensorEmbeddingBackward, tensorLayerNorm, tensorLayerNormBackward, tensorSoftmax, tensorSoftmaxBackward, tensorLogSoftmax, tensorLogSoftmaxBackward } from "./native_ops.js"
 import { randomFloat } from "./helperfunctions.js";
 
 export function neg(a: TensorData): TensorData{
@@ -284,9 +284,7 @@ export type LayerNormForwardResult = {
 };
 
 // Normalize the final input dimension. Statistics are returned for the fused backward pass.
-export function layernorm(
-    input: TensorData, gamma: TensorData, beta: TensorData, epsilon: number = 1e-5,
-): LayerNormForwardResult {
+export function layernorm(input: TensorData, gamma: TensorData, beta: TensorData, epsilon: number = 1e-5): LayerNormForwardResult {
     if (input._shape.length < 1) throw new Error('layernorm expects an input with rank at least 1');
     const features = input._shape[input._shape.length - 1]!;
     if (features <= 0) throw new Error('layernorm requires a non-empty normalized dimension');
@@ -312,10 +310,7 @@ export function layernorm(
     return { output, mean, invStd };
 }
 
-export function layernormBackward(
-    gradOutput: TensorData, input: TensorData, gamma: TensorData,
-    mean: TensorData, invStd: TensorData,
-): [TensorData, TensorData, TensorData] {
+export function layernormBackward(gradOutput: TensorData, input: TensorData, gamma: TensorData, mean: TensorData, invStd: TensorData): [TensorData, TensorData, TensorData] {
     const gradInput = TensorData.empty(input.shape);
     const gradGamma = TensorData.empty(gamma.shape);
     const gradBeta = TensorData.empty(gamma.shape);
@@ -330,6 +325,59 @@ export function layernormBackward(
         invStd._storage, invStd._shape, invStd._stride,
     );
     return [gradInput, gradGamma, gradBeta];
+}
+
+function normalizeDim(dim: number, rank: number, operation: string): number {
+    const normalized = dim < 0 ? dim + rank : dim;
+    if (normalized < 0 || normalized >= rank)
+        throw new Error(`${operation} received dim outside the input rank`);
+    return normalized;
+}
+
+export function softmaxData(input: TensorData, dim: number): TensorData {
+    const normalizedDim = normalizeDim(dim, input.dims, 'softmax');
+    const out = TensorData.empty(input.shape);
+    tensorSoftmax(
+        out._storage, out._shape, out._stride,
+        input._storage, input._shape, input._stride,
+        normalizedDim,
+    );
+    return out;
+}
+
+export function softmaxBackward(gradOutput: TensorData, out: TensorData, dim: number): TensorData {
+    const normalizedDim = normalizeDim(dim, out.dims, 'softmaxBackward');
+    const gradInput = TensorData.empty(out.shape);
+    tensorSoftmaxBackward(
+        gradInput._storage, gradInput._shape, gradInput._stride,
+        gradOutput._storage, gradOutput._shape, gradOutput._stride,
+        out._storage, out._shape, out._stride,
+        normalizedDim,
+    );
+    return gradInput;
+}
+
+export function logsoftmaxData(input: TensorData, dim: number): TensorData {
+    const normalizedDim = normalizeDim(dim, input.dims, 'logsoftmax');
+    const out = TensorData.empty(input.shape);
+    tensorLogSoftmax(
+        out._storage, out._shape, out._stride,
+        input._storage, input._shape, input._stride,
+        normalizedDim,
+    );
+    return out;
+}
+
+export function logsoftmaxBackward(gradOutput: TensorData, out: TensorData, dim: number): TensorData {
+    const normalizedDim = normalizeDim(dim, out.dims, 'logsoftmaxBackward');
+    const gradInput = TensorData.empty(out.shape);
+    tensorLogSoftmaxBackward(
+        gradInput._storage, gradInput._shape, gradInput._stride,
+        gradOutput._storage, gradOutput._shape, gradOutput._stride,
+        out._storage, out._shape, out._stride,
+        normalizedDim,
+    );
+    return gradInput;
 }
 
 export abstract class TensorFunction{
@@ -417,13 +465,11 @@ export function argmax(input: Tensor, dim: number): Tensor{
 }
 
 export function softmax(input: Tensor, dim: number): Tensor{
-    const exps = input.sub(new Tensor(max(input.data, dim))).exp();
-    return exps.div(exps.sum(dim));
+    return Tensor.apply(Softmax(dim), input);
 }
 
 export function logsoftmax(input: Tensor, dim: number): Tensor{
-    const shifted = input.sub(new Tensor(max(input.data, dim)));
-    return shifted.sub(shifted.exp().sum(dim).log());
+    return Tensor.apply(LogSoftmax(dim), input);
 }
 
 export class Neg extends TensorFunction{
@@ -692,6 +738,36 @@ export function LayerNorm(epsilon: number = 1e-5): typeof TensorFunction {
             const [input, gamma, mean, invStd] = ctx.savedValues as Tensor[];
             const [gradInput, gradGamma, gradBeta] = layernormBackward(gradOutput.data, input.data, gamma.data, mean.data, invStd.data);
             return [new Tensor(gradInput), new Tensor(gradGamma), new Tensor(gradBeta)];
+        }
+    };
+}
+
+export function Softmax(dim: number): typeof TensorFunction {
+    return class extends TensorFunction {
+        static forward(ctx: Context, input: Tensor): Tensor {
+            const result = new Tensor(softmaxData(input.data, dim));
+            ctx.saveForBackward(result);
+            return result;
+        }
+
+        static backward(ctx: Context, gradOutput: Tensor): Tensor[] {
+            const [result] = ctx.savedValues as Tensor[];
+            return [new Tensor(softmaxBackward(gradOutput.data, result.data, dim))];
+        }
+    };
+}
+
+export function LogSoftmax(dim: number): typeof TensorFunction {
+    return class extends TensorFunction {
+        static forward(ctx: Context, input: Tensor): Tensor {
+            const result = new Tensor(logsoftmaxData(input.data, dim));
+            ctx.saveForBackward(result);
+            return result;
+        }
+
+        static backward(ctx: Context, gradOutput: Tensor): Tensor[] {
+            const [result] = ctx.savedValues as Tensor[];
+            return [new Tensor(logsoftmaxBackward(gradOutput.data, result.data, dim))];
         }
     };
 }

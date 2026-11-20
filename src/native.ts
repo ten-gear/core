@@ -49,6 +49,13 @@ export type LayerNormBackwardNative = (
     invStd: NativeStorage, invStdShape: Shape, invStdStride: Stride,
 ) => void;
 
+export type SoftmaxBackwardNative = (
+    gradInput: NativeStorage, gradInputShape: Shape, gradInputStride: Stride,
+    gradOutput: NativeStorage, gradOutputShape: Shape, gradOutputStride: Stride,
+    out: NativeStorage, outShape: Shape, outStride: Stride,
+    dim: number,
+) => void;
+
 // Names match the strings addon.cc puts on `exports`.
 export type NativeAddon = {
     mapNeg: MapNative;
@@ -122,6 +129,10 @@ export type NativeAddon = {
     ) => void;
     layernorm: LayerNormNative;
     layernormBackward: LayerNormBackwardNative;
+    softmax: ReduceNative;
+    softmaxBackward: SoftmaxBackwardNative;
+    logSoftmax: ReduceNative;
+    logSoftmaxBackward: SoftmaxBackwardNative;
 };
 
 // Set by initBackend(). Keeping this named export preserves the low-level

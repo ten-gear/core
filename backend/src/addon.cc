@@ -304,6 +304,7 @@ using MapFn = void (*)(const tsgrad::View&, const tsgrad::View&);
 using ZipFn = void (*)(const tsgrad::View&, const tsgrad::View&, const tsgrad::View&);
 using ReduceFn = void (*)(const tsgrad::View&, const tsgrad::View&, int32_t);
 using ConvFn = void (*)(const tsgrad::View&, const tsgrad::View&, const tsgrad::View&, bool);
+using SoftmaxBackwardFn = void (*)(const tsgrad::View&, const tsgrad::View&, const tsgrad::View&, int32_t);
 
 template <typename Fn>
 void call_native(Napi::Env env, Fn&& fn) {
@@ -662,6 +663,40 @@ Napi::Value bind_layernorm_backward(const Napi::CallbackInfo& info) {
     return env.Undefined();
 }
 
+Napi::Value bind_softmax_backward(
+    const Napi::CallbackInfo& info, SoftmaxBackwardFn fn, const char* operation
+) {
+    Napi::Env env = info.Env();
+    if (info.Length() != 10) {
+        throw Napi::TypeError::New(env, std::string(operation) +
+            " expects (gradIn, gradInShape, gradInStride, gradOut, gradOutShape, gradOutStride, out, outShape, outStride, dim)");
+    }
+    std::vector<int32_t> grad_in_shape = read_i32_array(env, info[1], "gradInShape");
+    std::vector<int32_t> grad_in_stride = read_i32_array(env, info[2], "gradInStride");
+    std::vector<int32_t> grad_out_shape = read_i32_array(env, info[4], "gradOutShape");
+    std::vector<int32_t> grad_out_stride = read_i32_array(env, info[5], "gradOutStride");
+    std::vector<int32_t> out_shape = read_i32_array(env, info[7], "outShape");
+    std::vector<int32_t> out_stride = read_i32_array(env, info[8], "outStride");
+    const int32_t dim = read_i32_value(env, info[9], "dim");
+    check_rank(env, grad_in_shape, grad_in_stride, "gradIn");
+    check_rank(env, grad_out_shape, grad_out_stride, "gradOut");
+    check_rank(env, out_shape, out_stride, "out");
+
+    tsgrad::View grad_in = make_view(env, info[0], grad_in_shape, grad_in_stride, "gradIn");
+    tsgrad::View grad_out = make_view(env, info[3], grad_out_shape, grad_out_stride, "gradOut");
+    tsgrad::View out = make_view(env, info[6], out_shape, out_stride, "out");
+    call_native(env, [&](){ fn(grad_in, grad_out, out, dim); });
+    return env.Undefined();
+}
+
+void export_softmax_backward(
+    Napi::Env env, Napi::Object& exports, const char* name, SoftmaxBackwardFn fn
+) {
+    exports.Set(name, Napi::Function::New(env, [fn, name](const Napi::CallbackInfo& info) {
+        return bind_softmax_backward(info, fn, name);
+    }));
+}
+
 void export_conv(Napi::Env env, Napi::Object& exports, const char* name, ConvFn fn) {
     exports.Set(name, Napi::Function::New(env, [fn](const Napi::CallbackInfo& info) {
         return bind_conv(info, fn);
@@ -694,6 +729,10 @@ Napi::Object init(Napi::Env env, Napi::Object exports) {
     export_reduce(env, exports, "reduceMax", tsgrad::reduce_max);
     export_reduce(env, exports, "reduceSum", tsgrad::reduce_sum);
     export_reduce(env, exports, "reduceProd", tsgrad::reduce_prod);
+    export_reduce(env, exports, "softmax", tsgrad::softmax);
+    export_reduce(env, exports, "logSoftmax", tsgrad::logsoftmax);
+    export_softmax_backward(env, exports, "softmaxBackward", tsgrad::softmax_backward);
+    export_softmax_backward(env, exports, "logSoftmaxBackward", tsgrad::logsoftmax_backward);
 
     export_zip(env, exports, "matmul", tsgrad::matmul);
     export_conv(env, exports, "conv1d", tsgrad::conv1d);

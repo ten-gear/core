@@ -1,7 +1,7 @@
 import { describe, test, expect, vi } from "vitest"
 import { Tensor, tensorScope } from "../src/tensor.js"
 import { readStorage, TensorData } from "../src/tensor_data";
-import { conv1d, conv2d, embedding, embeddingBackward, scatter, tocontiguous } from "../src/tensor_functions.js";
+import { conv1d, conv2d, embedding, embeddingBackward, logsoftmax, scatter, softmax, tocontiguous } from "../src/tensor_functions.js";
 import { fastConv1d, fastConv2d } from "../src/fast_ops.js";
 import { loadNativeAddon, native } from "../src/native.js";
 import { CpuBackend } from "../src/backend/cpu_backend.js";
@@ -525,6 +525,78 @@ test("layernorm backward matches finite differences", () => {
             expect(betaGrad[i]).toBeCloseTo(finiteDifference(
                 betaValues, i, changed => loss(inputValues, gammaValues, changed),
             ), 2);
+    }
+    finally {
+        setBackendForTesting(previous);
+    }
+});
+
+test("softmax and logsoftmax support dimensions, strided views, and fused backward", () => {
+    const previous = getBackend();
+    setBackendForTesting(new CpuBackend());
+    try {
+        const base = new Tensor(new TensorData(new Float32Array([1, 2, 3, 4, 5, 6]), [2, 3]));
+        const strided = base.permute(1, 0);
+        const denominator = Math.exp(-2) + Math.exp(-1) + 1;
+        const probabilities = [Math.exp(-2) / denominator, Math.exp(-1) / denominator, 1 / denominator];
+        const stridedOutput = readStorage(softmax(strided, 0).data._storage);
+        probabilities.forEach((value, row) => {
+            expect(stridedOutput[row * 2]).toBeCloseTo(value);
+            expect(stridedOutput[row * 2 + 1]).toBeCloseTo(value);
+        });
+
+        const logOutput = readStorage(logsoftmax(base, -1).data._storage);
+        const logProbabilities = probabilities.map(Math.log);
+        for (let row = 0; row < 2; row++)
+            logProbabilities.forEach(
+                (value, col) => expect(logOutput[row * 3 + col]).toBeCloseTo(value),
+            );
+
+        const inputValues = new Float32Array([0.3, -1.2, 2.1, 1.5, 0.2, -0.7]);
+        const upstream = new Float32Array([0.5, -1, 0.25, 1.5, 0.75, -0.5]);
+        const expectedProbabilities: number[] = [];
+        for (let row = 0; row < 2; row++) {
+            const offset = row * 3;
+            const maximum = Math.max(...inputValues.slice(offset, offset + 3));
+            const exponentials = Array.from(
+                inputValues.slice(offset, offset + 3),
+                value => Math.exp(value - maximum),
+            );
+            const sum = exponentials.reduce((total, value) => total + value, 0);
+            expectedProbabilities.push(...exponentials.map(value => value / sum));
+        }
+
+        const softmaxInput = new Tensor(new TensorData(Float32Array.from(inputValues), [2, 3]));
+        softmaxInput._requiresGrad(true);
+        softmax(softmaxInput, 1).backward(
+            new Tensor(new TensorData(Float32Array.from(upstream), [2, 3])),
+        );
+        const softmaxGrad = readStorage(softmaxInput.grad!.data._storage);
+        for (let row = 0; row < 2; row++) {
+            const offset = row * 3;
+            let dot = 0;
+            for (let col = 0; col < 3; col++)
+                dot += upstream[offset + col]! * expectedProbabilities[offset + col]!;
+            for (let col = 0; col < 3; col++)
+                expect(softmaxGrad[offset + col]).toBeCloseTo(
+                    expectedProbabilities[offset + col]! * (upstream[offset + col]! - dot),
+                );
+        }
+
+        const logsoftmaxInput = new Tensor(new TensorData(Float32Array.from(inputValues), [2, 3]));
+        logsoftmaxInput._requiresGrad(true);
+        logsoftmax(logsoftmaxInput, 1).backward(
+            new Tensor(new TensorData(Float32Array.from(upstream), [2, 3])),
+        );
+        const logsoftmaxGrad = readStorage(logsoftmaxInput.grad!.data._storage);
+        for (let row = 0; row < 2; row++) {
+            const offset = row * 3;
+            const gradSum = upstream[offset]! + upstream[offset + 1]! + upstream[offset + 2]!;
+            for (let col = 0; col < 3; col++)
+                expect(logsoftmaxGrad[offset + col]).toBeCloseTo(
+                    upstream[offset + col]! - expectedProbabilities[offset + col]! * gradSum,
+                );
+        }
     }
     finally {
         setBackendForTesting(previous);

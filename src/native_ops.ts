@@ -165,6 +165,48 @@ export function tensorLayerNormBackward(
     );
 }
 
+export function tensorSoftmax(
+    out: TensorBuffer, outShape: Shape, outStride: Stride,
+    input: TensorBuffer, inShape: Shape, inStride: Stride,
+    dim: number,
+): void {
+    getBackend().softmax(out, outShape, outStride, input, inShape, inStride, dim);
+}
+
+export function tensorSoftmaxBackward(
+    gradInput: TensorBuffer, gradInputShape: Shape, gradInputStride: Stride,
+    gradOutput: TensorBuffer, gradOutputShape: Shape, gradOutputStride: Stride,
+    out: TensorBuffer, outShape: Shape, outStride: Stride,
+    dim: number,
+): void {
+    getBackend().softmaxBackward(
+        gradInput, gradInputShape, gradInputStride,
+        gradOutput, gradOutputShape, gradOutputStride,
+        out, outShape, outStride, dim,
+    );
+}
+
+export function tensorLogSoftmax(
+    out: TensorBuffer, outShape: Shape, outStride: Stride,
+    input: TensorBuffer, inShape: Shape, inStride: Stride,
+    dim: number,
+): void {
+    getBackend().logSoftmax(out, outShape, outStride, input, inShape, inStride, dim);
+}
+
+export function tensorLogSoftmaxBackward(
+    gradInput: TensorBuffer, gradInputShape: Shape, gradInputStride: Stride,
+    gradOutput: TensorBuffer, gradOutputShape: Shape, gradOutputStride: Stride,
+    out: TensorBuffer, outShape: Shape, outStride: Stride,
+    dim: number,
+): void {
+    getBackend().logSoftmaxBackward(
+        gradInput, gradInputShape, gradInputStride,
+        gradOutput, gradOutputShape, gradOutputStride,
+        out, outShape, outStride, dim,
+    );
+}
+
 export function tensorGather(
     out: TensorBuffer, outShape: Shape, outStride: Stride,
     indicies: TensorBuffer, indiciesShape: Shape, indiciesStride: Stride,

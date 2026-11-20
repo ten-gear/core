@@ -175,4 +175,44 @@ export class NativeBackend implements DeviceBackend {
             nativeStorage(invStd), invStdShape, invStdStride,
         );
     }
+
+    softmax(out: BackendStorage, outShape: Shape, outStride: Stride,
+        input: BackendStorage, inShape: Shape, inStride: Stride, dim: number): void {
+        this.addon.softmax(
+            nativeStorage(out), outShape, outStride,
+            nativeStorage(input), inShape, inStride, dim,
+        );
+    }
+
+    softmaxBackward(
+        gradInput: BackendStorage, gradInputShape: Shape, gradInputStride: Stride,
+        gradOutput: BackendStorage, gradOutputShape: Shape, gradOutputStride: Stride,
+        out: BackendStorage, outShape: Shape, outStride: Stride, dim: number,
+    ): void {
+        this.addon.softmaxBackward(
+            nativeStorage(gradInput), gradInputShape, gradInputStride,
+            nativeStorage(gradOutput), gradOutputShape, gradOutputStride,
+            nativeStorage(out), outShape, outStride, dim,
+        );
+    }
+
+    logSoftmax(out: BackendStorage, outShape: Shape, outStride: Stride,
+        input: BackendStorage, inShape: Shape, inStride: Stride, dim: number): void {
+        this.addon.logSoftmax(
+            nativeStorage(out), outShape, outStride,
+            nativeStorage(input), inShape, inStride, dim,
+        );
+    }
+
+    logSoftmaxBackward(
+        gradInput: BackendStorage, gradInputShape: Shape, gradInputStride: Stride,
+        gradOutput: BackendStorage, gradOutputShape: Shape, gradOutputStride: Stride,
+        out: BackendStorage, outShape: Shape, outStride: Stride, dim: number,
+    ): void {
+        this.addon.logSoftmaxBackward(
+            nativeStorage(gradInput), gradInputShape, gradInputStride,
+            nativeStorage(gradOutput), gradOutputShape, gradOutputStride,
+            nativeStorage(out), outShape, outStride, dim,
+        );
+    }
 }

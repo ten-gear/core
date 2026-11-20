@@ -96,6 +96,12 @@ void layernorm_backward(
     const View& grad_out, const View& in, const View& gamma,
     const View& mean, const View& inv_std);
 
+// Normalize along dim. Backward consumes the saved forward output.
+void softmax(const View& out, const View& input, int32_t dim);
+void softmax_backward(const View& grad_in, const View& grad_out, const View& out, int32_t dim);
+void logsoftmax(const View& out, const View& input, int32_t dim);
+void logsoftmax_backward(const View& grad_in, const View& grad_out, const View& out, int32_t dim);
+
 // Same signatures as above. Defined in src/cuda/*.cu when TSGRAD_HAS_CUDA is set.
 // On a CUDA build View::data is already a device pointer. The .cu function
 // launches on the process-wide stream and returns without waiting. It does not
@@ -169,6 +175,13 @@ void layernorm_backward(
     const View& grad_in, const View& grad_gamma, const View& grad_beta,
     const View& grad_out, const View& in, const View& gamma,
     const View& mean, const View& inv_std);
+
+void softmax(const View& out, const View& input, int32_t dim);
+void softmax_backward(
+    const View& grad_in, const View& grad_out, const View& out, int32_t dim);
+void logsoftmax(const View& out, const View& input, int32_t dim);
+void logsoftmax_backward(
+    const View& grad_in, const View& grad_out, const View& out, int32_t dim);
 
 // Non-zero storage fill. Queued on the process-wide stream. Does not wait.
 void fill(float* data, size_t numel, float value);

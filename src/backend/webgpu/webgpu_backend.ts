@@ -5,7 +5,7 @@ import {
     alignedMapShader, alignedZipShader, CONV1D_SHADER, CONV2D_SHADER, FILL_SHADER,
     EMBEDDING_BACKWARD_CONTIGUOUS_SHADER, EMBEDDING_BACKWARD_SHADER, EMBEDDING_CONTIGUOUS_SHADER, EMBEDDING_SHADER, GATHER_SHADER, MATMUL_SHADER, MAX_DIMS, reduceShader, SCATTER_SHADER, SGD_MOMENTUM_SHADER, SGD_SHADER,
     LAYERNORM_BACKWARD_INPUT_SHADER, LAYERNORM_BACKWARD_PARAMS_SHADER, LAYERNORM_SHADER,
-    stridedMapShader, stridedZipShader, WORKGROUP_SIZE,
+    softmaxBackwardShader, softmaxShader, stridedMapShader, stridedZipShader, WORKGROUP_SIZE,
 } from './webgpu_kernels.js';
 import { WebGPUStorage } from './webgpu_storage.js';
 
@@ -683,6 +683,95 @@ export class WebGpuBackend implements DeviceBackend {
             { binding: 5, resource: { buffer: gradBeta.buffer } },
             { binding: 6, resource: { buffer: paramParams } },
         ], [Math.ceil(features / WORKGROUP_SIZE)], [paramParams]);
+    }
+
+    private softmaxForward(logarithmic: boolean,
+        outStorage: BackendStorage, outShape: Shape, outStride: Stride,
+        inputStorage: BackendStorage, inShape: Shape, inStride: Stride,
+        dim: number, operation: string): void {
+        if (!same(outShape, inShape)) throw new Error(`${operation} input/output shape mismatch`);
+        if (inShape.length < 1 || inShape.length > MAX_DIMS)
+            throw new Error(`WebGPU ${operation} expects a rank between 1 and ${MAX_DIMS}`);
+        if (dim < 0 || dim >= inShape.length) throw new Error(`${operation} received dim outside the input rank`);
+        const dimSize = inShape[dim]!;
+        if (dimSize <= 0) throw new Error(`${operation} requires a non-empty normalized dimension`);
+        const rows = product(inShape) / dimSize;
+        if (rows === 0) return;
+
+        const out = gpuStorage(outStorage), input = gpuStorage(inputStorage);
+        const params = this.params([
+            rows, dimSize, inShape.length, dim,
+            ...this.pad(inShape), ...this.pad(outStride), ...this.pad(inStride),
+        ]);
+        this.submit(operation, softmaxShader(logarithmic), [
+            { binding: 0, resource: { buffer: input.buffer } },
+            { binding: 1, resource: { buffer: out.buffer } },
+            { binding: 2, resource: { buffer: params } },
+        ], [rows], [params]);
+    }
+
+    softmax(out: BackendStorage, outShape: Shape, outStride: Stride,
+        input: BackendStorage, inShape: Shape, inStride: Stride, dim: number): void {
+        this.softmaxForward(false, out, outShape, outStride, input, inShape, inStride, dim, 'softmax');
+    }
+
+    logSoftmax(out: BackendStorage, outShape: Shape, outStride: Stride,
+        input: BackendStorage, inShape: Shape, inStride: Stride, dim: number): void {
+        this.softmaxForward(true, out, outShape, outStride, input, inShape, inStride, dim, 'logSoftmax');
+    }
+
+    private softmaxBackwardImpl(logarithmic: boolean,
+        gradInputStorage: BackendStorage, gradInputShape: Shape, gradInputStride: Stride,
+        gradOutputStorage: BackendStorage, gradOutputShape: Shape, gradOutputStride: Stride,
+        outStorage: BackendStorage, outShape: Shape, outStride: Stride,
+        dim: number, operation: string): void {
+        if (!same(gradInputShape, outShape) || !same(gradOutputShape, outShape))
+            throw new Error(`${operation} gradient shape mismatch`);
+        if (outShape.length < 1 || outShape.length > MAX_DIMS)
+            throw new Error(`WebGPU ${operation} expects a rank between 1 and ${MAX_DIMS}`);
+        if (dim < 0 || dim >= outShape.length) throw new Error(`${operation} received dim outside the input rank`);
+        const dimSize = outShape[dim]!;
+        if (dimSize <= 0) throw new Error(`${operation} requires a non-empty normalized dimension`);
+        const rows = product(outShape) / dimSize;
+        if (rows === 0) return;
+
+        const gradInput = gpuStorage(gradInputStorage), gradOutput = gpuStorage(gradOutputStorage);
+        const out = gpuStorage(outStorage);
+        const params = this.params([
+            rows, dimSize, outShape.length, dim,
+            ...this.pad(outShape), ...this.pad(gradInputStride),
+            ...this.pad(gradOutputStride), ...this.pad(outStride),
+        ]);
+        this.submit(operation, softmaxBackwardShader(logarithmic), [
+            { binding: 0, resource: { buffer: gradOutput.buffer } },
+            { binding: 1, resource: { buffer: out.buffer } },
+            { binding: 2, resource: { buffer: gradInput.buffer } },
+            { binding: 3, resource: { buffer: params } },
+        ], [rows], [params]);
+    }
+
+    softmaxBackward(
+        gradInput: BackendStorage, gradInputShape: Shape, gradInputStride: Stride,
+        gradOutput: BackendStorage, gradOutputShape: Shape, gradOutputStride: Stride,
+        out: BackendStorage, outShape: Shape, outStride: Stride, dim: number,
+    ): void {
+        this.softmaxBackwardImpl(
+            false, gradInput, gradInputShape, gradInputStride,
+            gradOutput, gradOutputShape, gradOutputStride,
+            out, outShape, outStride, dim, 'softmaxBackward',
+        );
+    }
+
+    logSoftmaxBackward(
+        gradInput: BackendStorage, gradInputShape: Shape, gradInputStride: Stride,
+        gradOutput: BackendStorage, gradOutputShape: Shape, gradOutputStride: Stride,
+        out: BackendStorage, outShape: Shape, outStride: Stride, dim: number,
+    ): void {
+        this.softmaxBackwardImpl(
+            true, gradInput, gradInputShape, gradInputStride,
+            gradOutput, gradOutputShape, gradOutputStride,
+            out, outShape, outStride, dim, 'logSoftmaxBackward',
+        );
     }
 }
 

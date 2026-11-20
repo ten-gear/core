@@ -196,6 +196,113 @@ fn main(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index) tid:
 }`;
 }
 
+const SOFTMAX_HELPERS = `
+fn softmax_slice_position(row_in: u32, shape_offset: u32, stride_offset: u32, rank: u32, dim: u32) -> u32 {
+    var row = row_in;
+    var position = 0u;
+    for (var rev = 0u; rev < rank; rev++) {
+        let axis = rank - 1u - rev;
+        if (axis == dim) { continue; }
+        let index = row % params[shape_offset + axis];
+        row = row / params[shape_offset + axis];
+        position += index * params[stride_offset + axis];
+    }
+    return position;
+}
+`;
+
+export function softmaxShader(logarithmic: boolean): string {
+    const write = logarithmic
+        ? 'output_data[out_base + col * out_stride] = input_data[input_base + col * input_stride] - (maximum + log(partial[0]));'
+        : 'output_data[out_base + col * out_stride] = exp(input_data[input_base + col * input_stride] - maximum) / partial[0];';
+    return `
+@group(0) @binding(0) var<storage, read> input_data: array<f32>;
+@group(0) @binding(1) var<storage, read_write> output_data: array<f32>;
+@group(0) @binding(2) var<storage, read> params: array<u32>;
+${SOFTMAX_HELPERS}
+var<workgroup> partial: array<f32, ${WORKGROUP_SIZE}>;
+@compute @workgroup_size(${WORKGROUP_SIZE})
+fn main(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index) tid: u32) {
+    let dim_size = params[1];
+    let rank = params[2];
+    let dim = params[3];
+    let input_base = softmax_slice_position(wid.x, 4u, ${4 + MAX_DIMS * 2}u, rank, dim);
+    let out_base = softmax_slice_position(wid.x, 4u, ${4 + MAX_DIMS}u, rank, dim);
+    let input_stride = params[${4 + MAX_DIMS * 2}u + dim];
+    let out_stride = params[${4 + MAX_DIMS}u + dim];
+
+    var local_max = -3.402823466e+38;
+    for (var col = tid; col < dim_size; col += ${WORKGROUP_SIZE}u) {
+        local_max = max(local_max, input_data[input_base + col * input_stride]);
+    }
+    partial[tid] = local_max;
+    workgroupBarrier();
+    for (var stride = ${WORKGROUP_SIZE / 2}u; stride > 0u; stride >>= 1u) {
+        if (tid < stride) { partial[tid] = max(partial[tid], partial[tid + stride]); }
+        workgroupBarrier();
+    }
+    let maximum = partial[0];
+
+    var local_sum = 0.0;
+    for (var col = tid; col < dim_size; col += ${WORKGROUP_SIZE}u) {
+        local_sum += exp(input_data[input_base + col * input_stride] - maximum);
+    }
+    partial[tid] = local_sum;
+    workgroupBarrier();
+    for (var stride = ${WORKGROUP_SIZE / 2}u; stride > 0u; stride >>= 1u) {
+        if (tid < stride) { partial[tid] += partial[tid + stride]; }
+        workgroupBarrier();
+    }
+    for (var col = tid; col < dim_size; col += ${WORKGROUP_SIZE}u) {
+        ${write}
+    }
+}`;
+}
+
+export function softmaxBackwardShader(logarithmic: boolean): string {
+    const accumulation = logarithmic
+        ? 'local_sum += grad_output_data[grad_output_base + col * grad_output_stride];'
+        : 'local_sum += grad_output_data[grad_output_base + col * grad_output_stride] * output_data[out_base + col * out_stride];';
+    const write = logarithmic
+        ? 'grad_input_data[grad_input_base + col * grad_input_stride] = dy - exp(y) * partial[0];'
+        : 'grad_input_data[grad_input_base + col * grad_input_stride] = y * (dy - partial[0]);';
+    return `
+@group(0) @binding(0) var<storage, read> grad_output_data: array<f32>;
+@group(0) @binding(1) var<storage, read> output_data: array<f32>;
+@group(0) @binding(2) var<storage, read_write> grad_input_data: array<f32>;
+@group(0) @binding(3) var<storage, read> params: array<u32>;
+${SOFTMAX_HELPERS}
+var<workgroup> partial: array<f32, ${WORKGROUP_SIZE}>;
+@compute @workgroup_size(${WORKGROUP_SIZE})
+fn main(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index) tid: u32) {
+    let dim_size = params[1];
+    let rank = params[2];
+    let dim = params[3];
+    let grad_input_base = softmax_slice_position(wid.x, 4u, ${4 + MAX_DIMS}u, rank, dim);
+    let grad_output_base = softmax_slice_position(wid.x, 4u, ${4 + MAX_DIMS * 2}u, rank, dim);
+    let out_base = softmax_slice_position(wid.x, 4u, ${4 + MAX_DIMS * 3}u, rank, dim);
+    let grad_input_stride = params[${4 + MAX_DIMS}u + dim];
+    let grad_output_stride = params[${4 + MAX_DIMS * 2}u + dim];
+    let out_stride = params[${4 + MAX_DIMS * 3}u + dim];
+
+    var local_sum = 0.0;
+    for (var col = tid; col < dim_size; col += ${WORKGROUP_SIZE}u) {
+        ${accumulation}
+    }
+    partial[tid] = local_sum;
+    workgroupBarrier();
+    for (var stride = ${WORKGROUP_SIZE / 2}u; stride > 0u; stride >>= 1u) {
+        if (tid < stride) { partial[tid] += partial[tid + stride]; }
+        workgroupBarrier();
+    }
+    for (var col = tid; col < dim_size; col += ${WORKGROUP_SIZE}u) {
+        let dy = grad_output_data[grad_output_base + col * grad_output_stride];
+        let y = output_data[out_base + col * out_stride];
+        ${write}
+    }
+}`;
+}
+
 export const GATHER_SHADER = `
 @group(0) @binding(0) var<storage, read> indicies_data: array<f32>;
 @group(0) @binding(1) var<storage, read> values_data: array<f32>;

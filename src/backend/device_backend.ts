@@ -109,4 +109,26 @@ export interface DeviceBackend {
         mean: BackendStorage, meanShape: Shape, meanStride: Stride,
         invStd: BackendStorage, invStdShape: Shape, invStdStride: Stride,
     ) => void;
+    softmax(
+        out: BackendStorage, outShape: Shape, outStride: Stride,
+        input: BackendStorage, inShape: Shape, inStride: Stride,
+        dim: number,
+    ): void;
+    softmaxBackward(
+        gradInput: BackendStorage, gradInputShape: Shape, gradInputStride: Stride,
+        gradOutput: BackendStorage, gradOutputShape: Shape, gradOutputStride: Stride,
+        out: BackendStorage, outShape: Shape, outStride: Stride,
+        dim: number,
+    ): void;
+    logSoftmax(
+        out: BackendStorage, outShape: Shape, outStride: Stride,
+        input: BackendStorage, inShape: Shape, inStride: Stride,
+        dim: number,
+    ): void;
+    logSoftmaxBackward(
+        gradInput: BackendStorage, gradInputShape: Shape, gradInputStride: Stride,
+        gradOutput: BackendStorage, gradOutputShape: Shape, gradOutputStride: Stride,
+        out: BackendStorage, outShape: Shape, outStride: Stride,
+        dim: number,
+    ): void;
 }

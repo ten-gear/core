@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, test } from 'vitest';
 import { setBackendForTesting } from '../src/backend/index.js';
 import { tryCreateWebGpuBackend, WebGpuBackend } from '../src/backend/webgpu/webgpu_backend.js';
 import { Tensor } from '../src/tensor.js';
-import { conv1d, embedding, embeddingBackward, gather, scatter, tocontiguous } from '../src/tensor_functions.js';
+import { conv1d, embedding, embeddingBackward, gather, logsoftmax, scatter, softmax, tocontiguous } from '../src/tensor_functions.js';
 import { readStorageAsync, TensorData } from '../src/tensor_data.js';
 
 const backend = await tryCreateWebGpuBackend();
@@ -230,6 +230,59 @@ describe.skipIf(!backend)('WebGPU backend', () => {
         expectClose(await input.grad!.toFloat32(), expectedInputGrad);
         expectClose(await gamma.grad!.toFloat32(), expectedGammaGrad);
         expectClose(await beta.grad!.toFloat32(), expectedBetaGrad);
+    });
+
+    test('runs softmax and logsoftmax forward and backward', async () => {
+        const values = new Float32Array([0.3, -1.2, 2.1, 1.5, 0.2, -0.7]);
+        const upstream = new Float32Array([0.5, -1, 0.25, 1.5, 0.75, -0.5]);
+        const probabilities = new Float32Array(6);
+        const softmaxGrad = new Float32Array(6);
+        const logsoftmaxGrad = new Float32Array(6);
+        for (let row = 0; row < 2; row++) {
+            const offset = row * 3;
+            const maximum = Math.max(values[offset]!, values[offset + 1]!, values[offset + 2]!);
+            let sum = 0;
+            for (let col = 0; col < 3; col++)
+                sum += probabilities[offset + col] = Math.exp(values[offset + col]! - maximum);
+            let dot = 0;
+            let gradSum = 0;
+            for (let col = 0; col < 3; col++) {
+                probabilities[offset + col]! /= sum;
+                dot += upstream[offset + col]! * probabilities[offset + col]!;
+                gradSum += upstream[offset + col]!;
+            }
+            for (let col = 0; col < 3; col++) {
+                softmaxGrad[offset + col] =
+                    probabilities[offset + col]! * (upstream[offset + col]! - dot);
+                logsoftmaxGrad[offset + col] =
+                    upstream[offset + col]! - probabilities[offset + col]! * gradSum;
+            }
+        }
+
+        const softmaxInput = new Tensor(new TensorData(Float32Array.from(values), [2, 3]));
+        softmaxInput._requiresGrad(true);
+        const softmaxOutput = softmax(softmaxInput, -1);
+        expectClose(await softmaxOutput.toFloat32(), probabilities);
+        softmaxOutput.backward(new Tensor(new TensorData(Float32Array.from(upstream), [2, 3])));
+        expectClose(await softmaxInput.grad!.toFloat32(), softmaxGrad);
+
+        const logsoftmaxInput = new Tensor(new TensorData(Float32Array.from(values), [2, 3]));
+        logsoftmaxInput._requiresGrad(true);
+        const logsoftmaxOutput = logsoftmax(logsoftmaxInput, 1);
+        expectClose(await logsoftmaxOutput.exp().toFloat32(), probabilities);
+        logsoftmaxOutput.backward(new Tensor(new TensorData(Float32Array.from(upstream), [2, 3])));
+        expectClose(await logsoftmaxInput.grad!.toFloat32(), logsoftmaxGrad);
+
+        const strided = new Tensor(
+            new TensorData(new Float32Array([1, 2, 3, 4, 5, 6]), [2, 3]),
+        ).permute(1, 0);
+        const denominator = Math.exp(-2) + Math.exp(-1) + 1;
+        const dimProbabilities = [Math.exp(-2), Math.exp(-1), 1].map(value => value / denominator);
+        expectClose(await softmax(strided, 0).toFloat32(), [
+            dimProbabilities[0]!, dimProbabilities[0]!,
+            dimProbabilities[1]!, dimProbabilities[1]!,
+            dimProbabilities[2]!, dimProbabilities[2]!,
+        ]);
     });
 
     test('reuses pooled buffers without violating queue order', async () => {
