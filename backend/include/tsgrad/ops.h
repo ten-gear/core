@@ -51,6 +51,7 @@ void zip_silu_backward(const View& out, const View& grad, const View& in);
 // param and grad are the same shape. Both are updated through param's data.
 void sgd(const View& param, const View& grad, float lr);
 void sgd_momentum(const View& param, const View& grad, const View& velocity, float lr, float beta);
+void adamw(const View& param, const View& grad, const View& m, const View& v, float lr, float beta1, float beta2, float eps, float weight_decay, uint64_t t);
 
 // out's reduced dimension has length 1. base is the identity:
 // max uses -infinity, sum uses 0, prod uses 1. Same walk as tensorReduce.
@@ -151,6 +152,7 @@ void zip_silu_backward(const View& out, const View& grad, const View& in);
 
 void sgd(const View& param, const View& grad, float lr);
 void sgd_momentum(const View& param, const View& grad, const View& velocity, float lr, float beta);
+void adamw(const View& param, const View& grad, const View& m, const View& v, float lr, float beta1, float beta2, float eps, float weight_decay, uint64_t t);
 
 void reduce_max(const View& out, const View& in, int32_t dim);
 void reduce_sum(const View& out, const View& in, int32_t dim);

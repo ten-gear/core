@@ -4,6 +4,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <cmath>
 
 namespace tsgrad {
 namespace {
@@ -70,6 +71,43 @@ void sgd_momentum(const View& param, const View& grad, const View& velocity, flo
         const float updated = beta * velocity.data[vpos] + (1.0F - beta) * grad.data[gpos];
         velocity.data[vpos] = updated;
         param.data[pos] -= lr * updated;
+    }
+}
+
+void adamw(const View& param, const View& grad, const View& m, const View& v, float lr, float beta1, float beta2, float eps, float weight_decay, uint64_t t) {
+    check_same_shape(param, grad, "adamw");
+    check_same_shape(param, m, "adamw");
+    check_same_shape(param, v, "adamw");
+    if (t == 0)
+        throw std::runtime_error("AdamW t must be at least 1");
+
+    if (!is_contiguous(param) || !is_contiguous(grad) || !is_contiguous(v) || !is_contiguous(m))
+        throw std::runtime_error("AdamW requires contiguous storage");
+
+    if constexpr (TSGRAD_HAS_CUDA) {
+        cuda::adamw(param, grad, m, v, lr, beta1, beta2, eps, weight_decay, t);
+        return;
+    }
+
+    const long long n = prod(param.shape, param.rank);
+    if (n == 0) return;
+
+    float bias1 = 1 - std::pow(beta1, t);
+    float bias2 = 1 - std::pow(beta2, t);
+
+    #pragma omp parallel for if (n >= THRESHOLD)
+    for (long long i = 0; i < n; i++) {
+        const float g = grad.data[i];
+        const float mi = beta1 * m.data[i] + (1.0f - beta1) * g;
+        const float vi = beta2 * v.data[i] + (1.0f - beta2) * g * g;
+
+        m.data[i] = mi;
+        v.data[i] = vi;
+
+        const float mhat = mi / bias1;
+        const float vhat = vi / bias2;
+
+        param.data[i] = param.data[i] * (1.0f - lr * weight_decay) - lr * mhat / (std::sqrt(vhat) + eps);
     }
 }
 

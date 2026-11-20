@@ -470,6 +470,47 @@ Napi::Value bind_sgd_momentum(const Napi::CallbackInfo& info) {
     return env.Undefined();
 }
 
+Napi::Value bind_adamw(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() != 18) {
+        throw Napi::TypeError::New(env, "adamw expects (param, shape, stride, grad, gradShape, gradStride, m, mShape, mStride, v, vShape, vStride, lr, beta1, beta2, eps, weightDecay, t)");
+    }
+    std::vector<int32_t> shape = read_i32_array(env, info[1], "shape");
+    std::vector<int32_t> stride = read_i32_array(env, info[2], "stride");
+    std::vector<int32_t> grad_shape = read_i32_array(env, info[4], "gradShape");
+    std::vector<int32_t> grad_stride = read_i32_array(env, info[5], "gradStride");
+    std::vector<int32_t> m_shape = read_i32_array(env, info[7], "mShape");
+    std::vector<int32_t> m_stride = read_i32_array(env, info[8], "mStride");
+    std::vector<int32_t> v_shape = read_i32_array(env, info[10], "vShape");
+    std::vector<int32_t> v_stride = read_i32_array(env, info[11], "vStride");
+    check_rank(env, shape, stride, "param");
+    check_rank(env, grad_shape, grad_stride, "grad");
+    check_rank(env, m_shape, m_stride, "m");
+    check_rank(env, v_shape, v_stride, "v");
+    for (size_t i = 12; i < 18; i++) {
+        if (!info[i].IsNumber())
+            throw Napi::TypeError::New(env, "AdamW hyperparameters and t must be numbers");
+    }
+    const int64_t step = info[17].As<Napi::Number>().Int64Value();
+    if (step < 1)
+        throw Napi::RangeError::New(env, "AdamW t must be at least 1");
+
+    tsgrad::View param = make_view(env, info[0], shape, stride, "param");
+    tsgrad::View grad = make_view(env, info[3], grad_shape, grad_stride, "grad");
+    tsgrad::View m = make_view(env, info[6], m_shape, m_stride, "m");
+    tsgrad::View v = make_view(env, info[9], v_shape, v_stride, "v");
+    call_native(env, [&](){
+        tsgrad::adamw(param, grad, m, v,
+            info[12].As<Napi::Number>().FloatValue(),
+            info[13].As<Napi::Number>().FloatValue(),
+            info[14].As<Napi::Number>().FloatValue(),
+            info[15].As<Napi::Number>().FloatValue(),
+            info[16].As<Napi::Number>().FloatValue(),
+            static_cast<uint64_t>(step));
+    });
+    return env.Undefined();
+}
+
 Napi::Value bind_gather(const Napi::CallbackInfo& info){
     Napi::Env env = info.Env();
     if (info.Length() != 10) {
@@ -745,6 +786,7 @@ Napi::Object init(Napi::Env env, Napi::Object exports) {
     exports.Set("layernormBackward", Napi::Function::New(env, bind_layernorm_backward));
     exports.Set("sgd", Napi::Function::New(env, bind_sgd));
     exports.Set("sgdMomentum", Napi::Function::New(env, bind_sgd_momentum));
+    exports.Set("adamw", Napi::Function::New(env, bind_adamw));
     return exports;
 }
 

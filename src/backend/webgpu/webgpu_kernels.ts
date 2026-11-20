@@ -719,3 +719,27 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     velocity[gid.x] = next;
     param[gid.x] -= lr * next;
 }`;
+
+export const ADAMW_SHADER = `
+@group(0) @binding(0) var<storage, read_write> param: array<f32>;
+@group(0) @binding(1) var<storage, read> grad: array<f32>;
+@group(0) @binding(2) var<storage, read_write> m: array<f32>;
+@group(0) @binding(3) var<storage, read_write> v: array<f32>;
+@group(0) @binding(4) var<storage, read> p: array<u32>;
+@compute @workgroup_size(${WORKGROUP_SIZE})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+    if (gid.x >= p[0]) { return; }
+    let lr = bitcast<f32>(p[1]);
+    let beta1 = bitcast<f32>(p[2]);
+    let beta2 = bitcast<f32>(p[3]);
+    let eps = bitcast<f32>(p[4]);
+    let weight_decay = bitcast<f32>(p[5]);
+    let bias1 = bitcast<f32>(p[6]);
+    let bias2 = bitcast<f32>(p[7]);
+    let g = grad[gid.x];
+    let next_m = beta1 * m[gid.x] + (1.0 - beta1) * g;
+    let next_v = beta2 * v[gid.x] + (1.0 - beta2) * g * g;
+    m[gid.x] = next_m;
+    v[gid.x] = next_v;
+    param[gid.x] = param[gid.x] * (1.0 - lr * weight_decay) - lr * (next_m / bias1) / (sqrt(next_v / bias2) + eps);
+}`;

@@ -2,7 +2,7 @@ import type {
     BackendStorage, BinaryOp, DeviceBackend, ReduceOp, Shape, Stride, UnaryOp,
 } from '../device_backend.js';
 import {
-    alignedMapShader, alignedZipShader, CONV1D_SHADER, CONV2D_SHADER, FILL_SHADER,
+    ADAMW_SHADER, alignedMapShader, alignedZipShader, CONV1D_SHADER, CONV2D_SHADER, FILL_SHADER,
     EMBEDDING_BACKWARD_CONTIGUOUS_SHADER, EMBEDDING_BACKWARD_SHADER, EMBEDDING_CONTIGUOUS_SHADER, EMBEDDING_SHADER, GATHER_SHADER, MATMUL_SHADER, MAX_DIMS, reduceShader, SCATTER_SHADER, SGD_MOMENTUM_SHADER, SGD_SHADER,
     LAYERNORM_BACKWARD_INPUT_SHADER, LAYERNORM_BACKWARD_PARAMS_SHADER, LAYERNORM_SHADER,
     softmaxBackwardShader, softmaxShader, stridedMapShader, stridedZipShader, WORKGROUP_SIZE,
@@ -388,6 +388,32 @@ export class WebGpuBackend implements DeviceBackend {
         this.submit('sgdMomentum', SGD_MOMENTUM_SHADER, [
             { binding: 0, resource: { buffer: param.buffer } }, { binding: 1, resource: { buffer: grad.buffer } },
             { binding: 2, resource: { buffer: velocity.buffer } }, { binding: 3, resource: { buffer: params } },
+        ], [Math.ceil(size / WORKGROUP_SIZE)], [params]);
+    }
+
+    adamw(paramStorage: BackendStorage, shape: Shape, stride: Stride,
+        gradStorage: BackendStorage, _gradShape: Shape, gradStride: Stride,
+        mStorage: BackendStorage, _mShape: Shape, mStride: Stride,
+        vStorage: BackendStorage, _vShape: Shape, vStride: Stride,
+        lr: number, beta1: number, beta2: number, eps: number, weightDecay: number, t: number): void {
+        if (!contiguous(shape, stride) || !contiguous(shape, gradStride)
+            || !contiguous(shape, mStride) || !contiguous(shape, vStride))
+            throw new Error('WebGPU AdamW requires contiguous tensors');
+        if (t < 1) throw new Error('AdamW t must be at least 1');
+
+        const param = gpuStorage(paramStorage), grad = gpuStorage(gradStorage);
+        const m = gpuStorage(mStorage), v = gpuStorage(vStorage), size = product(shape);
+        const params = this.params([
+            size, floatBits(lr), floatBits(beta1), floatBits(beta2),
+            floatBits(eps), floatBits(weightDecay),
+            floatBits(1 - Math.pow(beta1, t)), floatBits(1 - Math.pow(beta2, t)),
+        ]);
+        this.submit('adamw', ADAMW_SHADER, [
+            { binding: 0, resource: { buffer: param.buffer } },
+            { binding: 1, resource: { buffer: grad.buffer } },
+            { binding: 2, resource: { buffer: m.buffer } },
+            { binding: 3, resource: { buffer: v.buffer } },
+            { binding: 4, resource: { buffer: params } },
         ], [Math.ceil(size / WORKGROUP_SIZE)], [params]);
     }
 

@@ -103,6 +103,13 @@ export type NativeAddon = {
         velocity: NativeStorage, velocityShape: Shape, velocityStride: Stride,
         lr: number, beta: number,
     ) => void;
+    adamw: (
+        param: NativeStorage, shape: Shape, stride: Stride,
+        grad: NativeStorage, gradShape: Shape, gradStride: Stride,
+        m: NativeStorage, mShape: Shape, mStride: Stride,
+        v: NativeStorage, vShape: Shape, vStride: Stride,
+        lr: number, beta1: number, beta2: number, eps: number, weightDecay: number, t: number,
+    ) => void;
     gather: (
         out: NativeStorage, outShape: Shape, outStride: Stride,
         indicies: NativeStorage, indiciesShape: Shape, indiciesStride: Stride,

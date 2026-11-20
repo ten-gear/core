@@ -267,6 +267,30 @@ export class CpuBackend implements DeviceBackend {
         }
     }
 
+    adamw(param: BackendStorage, shape: Shape, stride: Stride,
+        grad: BackendStorage, _gradShape: Shape, gradStride: Stride,
+        m: BackendStorage, _mShape: Shape, mStride: Stride,
+        v: BackendStorage, _vShape: Shape, vStride: Stride,
+        lr: number, beta1: number, beta2: number, eps: number, weightDecay: number, t: number): void {
+        if (!contiguous(shape, stride) || !contiguous(shape, gradStride)
+            || !contiguous(shape, mStride) || !contiguous(shape, vStride))
+            throw new Error('AdamW requires contiguous tensors');
+        if (t < 1) throw new Error('AdamW t must be at least 1');
+
+        const p = host(param), g = host(grad), first = host(m), second = host(v);
+        const size = shape.reduce((a, b) => a * b, 1);
+        const bias1 = 1 - Math.pow(beta1, t);
+        const bias2 = 1 - Math.pow(beta2, t);
+        for (let i = 0; i < size; i++) {
+            const nextM = beta1 * first[i]! + (1 - beta1) * g[i]!;
+            const nextV = beta2 * second[i]! + (1 - beta2) * g[i]! * g[i]!;
+            first[i] = nextM;
+            second[i] = nextV;
+            p[i] = p[i]! * (1 - lr * weightDecay)
+                - lr * (nextM / bias1) / (Math.sqrt(nextV / bias2) + eps);
+        }
+    }
+
     gather(out: BackendStorage, outShape: Shape, outStride: Stride,
         indicies: BackendStorage, indiciesShape: Shape, indiciesStride: Stride,
         values: BackendStorage, valuesShape: Shape, valuesStride: Stride,

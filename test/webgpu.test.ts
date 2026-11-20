@@ -82,6 +82,23 @@ describe.skipIf(!backend)('WebGPU backend', () => {
         backend!.release(grad);
     });
 
+    test('updates parameters and moments with AdamW', async () => {
+        const param = backend!.alloc(3);
+        const grad = backend!.alloc(3);
+        const m = backend!.alloc(3, 0);
+        const v = backend!.alloc(3, 0);
+        backend!.copyFromHost(param, new Float32Array([1, 2, 3]));
+        backend!.copyFromHost(grad, new Float32Array([0.5, -1, 2]));
+        backend!.adamw(param, [3], [1], grad, [3], [1], m, [3], [1], v, [3], [1], 0.1, 0.9, 0.999, 1e-8, 0.01, 1);
+        expectClose(await backend!.copyToHostAsync(param), [0.899, 2.098, 2.897]);
+        expectClose(await backend!.copyToHostAsync(m), [0.05, -0.1, 0.2]);
+        expectClose(await backend!.copyToHostAsync(v), [0.00025, 0.001, 0.004]);
+        backend!.release(param);
+        backend!.release(grad);
+        backend!.release(m);
+        backend!.release(v);
+    });
+
     test('gathers through strided index and value views', async () => {
         const values = new TensorData(new Float32Array([10, 11, 12, 20, 21, 22]), [2, 3]);
         const indices = new TensorData(new Float32Array([1, 0, 0, 1]), [2, 2]);

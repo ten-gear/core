@@ -87,6 +87,19 @@ export class NativeBackend implements DeviceBackend {
             lr, beta,
         );
     }
+    adamw(param: BackendStorage, shape: Shape, stride: Stride,
+        grad: BackendStorage, gradShape: Shape, gradStride: Stride,
+        m: BackendStorage, mShape: Shape, mStride: Stride,
+        v: BackendStorage, vShape: Shape, vStride: Stride,
+        lr: number, beta1: number, beta2: number, eps: number, weightDecay: number, t: number): void {
+        this.addon.adamw(
+            nativeStorage(param), shape, stride,
+            nativeStorage(grad), gradShape, gradStride,
+            nativeStorage(m), mShape, mStride,
+            nativeStorage(v), vShape, vStride,
+            lr, beta1, beta2, eps, weightDecay, t,
+        );
+    }
 
     gather(out: BackendStorage, outShape: Shape, outStride: Stride,
         indicies: BackendStorage, indiciesShape: Shape, indiciesStride: Stride,
