@@ -118,6 +118,48 @@ export function tensorEmbeddingBackward(
     getBackend().embeddingBackward(table, tableShape, tableStride, indicies, indiciesShape, indiciesStride, grad, gradShape, gradStride, features);
 }
 
+export function tensorLayerNorm(
+    out: TensorBuffer, outShape: Shape, outStride: Stride,
+    input: TensorBuffer, inShape: Shape, inStride: Stride,
+    gamma: TensorBuffer, gammaShape: Shape, gammaStride: Stride,
+    beta: TensorBuffer, betaShape: Shape, betaStride: Stride,
+    mean: TensorBuffer, meanShape: Shape, meanStride: Stride,
+    invStd: TensorBuffer, invStdShape: Shape, invStdStride: Stride,
+    epsilon: number,
+): void {
+    getBackend().layernorm(
+        out, outShape, outStride,
+        input, inShape, inStride,
+        gamma, gammaShape, gammaStride,
+        beta, betaShape, betaStride,
+        mean, meanShape, meanStride,
+        invStd, invStdShape, invStdStride,
+        epsilon,
+    );
+}
+
+export function tensorLayerNormBackward(
+    gradInput: TensorBuffer, gradInputShape: Shape, gradInputStride: Stride,
+    gradGamma: TensorBuffer, gradGammaShape: Shape, gradGammaStride: Stride,
+    gradBeta: TensorBuffer, gradBetaShape: Shape, gradBetaStride: Stride,
+    gradOutput: TensorBuffer, gradOutputShape: Shape, gradOutputStride: Stride,
+    input: TensorBuffer, inShape: Shape, inStride: Stride,
+    gamma: TensorBuffer, gammaShape: Shape, gammaStride: Stride,
+    mean: TensorBuffer, meanShape: Shape, meanStride: Stride,
+    invStd: TensorBuffer, invStdShape: Shape, invStdStride: Stride,
+): void {
+    getBackend().layernormBackward(
+        gradInput, gradInputShape, gradInputStride,
+        gradGamma, gradGammaShape, gradGammaStride,
+        gradBeta, gradBetaShape, gradBetaStride,
+        gradOutput, gradOutputShape, gradOutputStride,
+        input, inShape, inStride,
+        gamma, gammaShape, gammaStride,
+        mean, meanShape, meanStride,
+        invStd, invStdShape, invStdStride,
+    );
+}
+
 export function tensorGather(
     out: TensorBuffer, outShape: Shape, outStride: Stride,
     indicies: TensorBuffer, indiciesShape: Shape, indiciesStride: Stride,

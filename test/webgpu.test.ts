@@ -166,6 +166,59 @@ describe.skipIf(!backend)('WebGPU backend', () => {
         expectClose(await readStorageAsync(tocontiguous(viewed)._storage), expected);
     });
 
+    test('runs layernorm forward and backward on the last dimension', async () => {
+        const inputValues = new Float32Array([0.3, -1.2, 2.1, 1.5, 0.2, -0.7]);
+        const gammaValues = new Float32Array([1.1, -0.4, 0.8]);
+        const betaValues = new Float32Array([0.2, -0.3, 0.5]);
+        const upstream = new Float32Array([0.5, -1, 0.25, 1.5, 0.75, -0.5]);
+        const expectedOutput = new Float32Array(6);
+        const expectedInputGrad = new Float32Array(6);
+        const expectedGammaGrad = new Float32Array(3);
+        const expectedBetaGrad = new Float32Array(3);
+
+        for (let row = 0; row < 2; row++) {
+            const base = row * 3;
+            const mean = (inputValues[base]! + inputValues[base + 1]! + inputValues[base + 2]!) / 3;
+            const variance = (
+                (inputValues[base]! - mean) ** 2 +
+                (inputValues[base + 1]! - mean) ** 2 +
+                (inputValues[base + 2]! - mean) ** 2
+            ) / 3;
+            const invStd = 1 / Math.sqrt(variance + 1e-5);
+            let sumQ = 0;
+            let sumQXHat = 0;
+            for (let col = 0; col < 3; col++) {
+                const index = base + col;
+                const xHat = (inputValues[index]! - mean) * invStd;
+                const q = upstream[index]! * gammaValues[col]!;
+                expectedOutput[index] = gammaValues[col]! * xHat + betaValues[col]!;
+                expectedGammaGrad[col]! += upstream[index]! * xHat;
+                expectedBetaGrad[col]! += upstream[index]!;
+                sumQ += q;
+                sumQXHat += q * xHat;
+            }
+            for (let col = 0; col < 3; col++) {
+                const index = base + col;
+                const xHat = (inputValues[index]! - mean) * invStd;
+                const q = upstream[index]! * gammaValues[col]!;
+                expectedInputGrad[index] = invStd * (q - sumQ / 3 - xHat * sumQXHat / 3);
+            }
+        }
+
+        const input = new Tensor(new TensorData(inputValues, [1, 2, 3]));
+        const gamma = new Tensor(new TensorData(gammaValues, [3]));
+        const beta = new Tensor(new TensorData(betaValues, [3]));
+        input._requiresGrad(true);
+        gamma._requiresGrad(true);
+        beta._requiresGrad(true);
+        const output = input.layernorm(gamma, beta);
+        expectClose(await output.toFloat32(), expectedOutput);
+        output.backward(new Tensor(new TensorData(upstream, [1, 2, 3])));
+        expectClose(await input.grad!.toFloat32(), expectedInputGrad);
+        expectClose(await gamma.grad!.toFloat32(), expectedGammaGrad);
+        expectClose(await beta.grad!.toFloat32(), expectedBetaGrad);
+    });
+
     test('reuses pooled buffers without violating queue order', async () => {
         const first = backend!.alloc(4, 7);
         const firstBuffer = first.buffer;

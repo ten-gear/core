@@ -305,6 +305,166 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     atomic_add_f32(table_pos, grad_data[grad_pos]);
 }`;
 
+const LAYERNORM_HELPERS = `
+fn layernorm_row_position(row_in: u32, shape_offset: u32, stride_offset: u32, rank: u32) -> u32 {
+    var row = row_in;
+    var position = 0u;
+    for (var rev = 0u; rev + 1u < rank; rev++) {
+        let dim = rank - 2u - rev;
+        let index = row % params[shape_offset + dim];
+        row = row / params[shape_offset + dim];
+        position += index * params[stride_offset + dim];
+    }
+    return position;
+}
+`;
+
+export const LAYERNORM_SHADER = `
+@group(0) @binding(0) var<storage, read> input_data: array<f32>;
+@group(0) @binding(1) var<storage, read> gamma_data: array<f32>;
+@group(0) @binding(2) var<storage, read> beta_data: array<f32>;
+@group(0) @binding(3) var<storage, read_write> output_data: array<f32>;
+@group(0) @binding(4) var<storage, read_write> mean_data: array<f32>;
+@group(0) @binding(5) var<storage, read_write> inv_std_data: array<f32>;
+@group(0) @binding(6) var<storage, read> params: array<u32>;
+${LAYERNORM_HELPERS}
+var<workgroup> partial: array<f32, ${WORKGROUP_SIZE}>;
+@compute @workgroup_size(${WORKGROUP_SIZE})
+fn main(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index) tid: u32) {
+    let row = wid.x;
+    let features = params[1];
+    let rank = params[2];
+    let input_base = layernorm_row_position(row, ${4 + MAX_DIMS}u, ${4 + MAX_DIMS * 2}u, rank);
+    let output_base = layernorm_row_position(row, ${4 + MAX_DIMS}u, 4u, rank);
+    let input_feature_stride = params[${4 + MAX_DIMS * 2}u + rank - 1u];
+    let output_feature_stride = params[4u + rank - 1u];
+
+    var local_sum = 0.0;
+    for (var col = tid; col < features; col += ${WORKGROUP_SIZE}u) {
+        local_sum += input_data[input_base + col * input_feature_stride];
+    }
+    partial[tid] = local_sum;
+    workgroupBarrier();
+    for (var stride = ${WORKGROUP_SIZE / 2}u; stride > 0u; stride >>= 1u) {
+        if (tid < stride) { partial[tid] += partial[tid + stride]; }
+        workgroupBarrier();
+    }
+    let row_mean = partial[0] / f32(features);
+
+    var local_variance = 0.0;
+    for (var col = tid; col < features; col += ${WORKGROUP_SIZE}u) {
+        let centered = input_data[input_base + col * input_feature_stride] - row_mean;
+        local_variance += centered * centered;
+    }
+    partial[tid] = local_variance;
+    workgroupBarrier();
+    for (var stride = ${WORKGROUP_SIZE / 2}u; stride > 0u; stride >>= 1u) {
+        if (tid < stride) { partial[tid] += partial[tid + stride]; }
+        workgroupBarrier();
+    }
+    let row_inv_std = inverseSqrt(partial[0] / f32(features) + bitcast<f32>(params[3]));
+
+    for (var col = tid; col < features; col += ${WORKGROUP_SIZE}u) {
+        let x_hat = (input_data[input_base + col * input_feature_stride] - row_mean) * row_inv_std;
+        output_data[output_base + col * output_feature_stride] =
+            gamma_data[col * params[${4 + MAX_DIMS * 3}]] * x_hat
+            + beta_data[col * params[${5 + MAX_DIMS * 3}]];
+    }
+    if (tid == 0u) {
+        mean_data[row * params[${6 + MAX_DIMS * 3}]] = row_mean;
+        inv_std_data[row * params[${7 + MAX_DIMS * 3}]] = row_inv_std;
+    }
+}`;
+
+export const LAYERNORM_BACKWARD_INPUT_SHADER = `
+@group(0) @binding(0) var<storage, read> grad_output_data: array<f32>;
+@group(0) @binding(1) var<storage, read> input_data: array<f32>;
+@group(0) @binding(2) var<storage, read> gamma_data: array<f32>;
+@group(0) @binding(3) var<storage, read> mean_data: array<f32>;
+@group(0) @binding(4) var<storage, read> inv_std_data: array<f32>;
+@group(0) @binding(5) var<storage, read_write> grad_input_data: array<f32>;
+@group(0) @binding(6) var<storage, read> params: array<u32>;
+${LAYERNORM_HELPERS}
+var<workgroup> partial_q: array<f32, ${WORKGROUP_SIZE}>;
+var<workgroup> partial_q_x_hat: array<f32, ${WORKGROUP_SIZE}>;
+@compute @workgroup_size(${WORKGROUP_SIZE})
+fn main(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index) tid: u32) {
+    let row = wid.x;
+    let features = params[1];
+    let rank = params[2];
+    let grad_input_base = layernorm_row_position(row, ${4 + MAX_DIMS}u, 4u, rank);
+    let grad_output_base = layernorm_row_position(row, ${4 + MAX_DIMS}u, ${4 + MAX_DIMS * 2}u, rank);
+    let input_base = layernorm_row_position(row, ${4 + MAX_DIMS}u, ${4 + MAX_DIMS * 3}u, rank);
+    let grad_input_feature_stride = params[4u + rank - 1u];
+    let grad_output_feature_stride = params[${4 + MAX_DIMS * 2}u + rank - 1u];
+    let input_feature_stride = params[${4 + MAX_DIMS * 3}u + rank - 1u];
+    let row_mean = mean_data[row * params[${4 + MAX_DIMS * 4}]];
+    let row_inv_std = inv_std_data[row * params[${5 + MAX_DIMS * 4}]];
+
+    var local_q = 0.0;
+    var local_q_x_hat = 0.0;
+    for (var col = tid; col < features; col += ${WORKGROUP_SIZE}u) {
+        let x_hat = (input_data[input_base + col * input_feature_stride] - row_mean) * row_inv_std;
+        let q = grad_output_data[grad_output_base + col * grad_output_feature_stride]
+            * gamma_data[col * params[${6 + MAX_DIMS * 4}]];
+        local_q += q;
+        local_q_x_hat += q * x_hat;
+    }
+    partial_q[tid] = local_q;
+    partial_q_x_hat[tid] = local_q_x_hat;
+    workgroupBarrier();
+    for (var stride = ${WORKGROUP_SIZE / 2}u; stride > 0u; stride >>= 1u) {
+        if (tid < stride) {
+            partial_q[tid] += partial_q[tid + stride];
+            partial_q_x_hat[tid] += partial_q_x_hat[tid + stride];
+        }
+        workgroupBarrier();
+    }
+    let mean_q = partial_q[0] / f32(features);
+    let mean_q_x_hat = partial_q_x_hat[0] / f32(features);
+    for (var col = tid; col < features; col += ${WORKGROUP_SIZE}u) {
+        let x_hat = (input_data[input_base + col * input_feature_stride] - row_mean) * row_inv_std;
+        let q = grad_output_data[grad_output_base + col * grad_output_feature_stride]
+            * gamma_data[col * params[${6 + MAX_DIMS * 4}]];
+        grad_input_data[grad_input_base + col * grad_input_feature_stride] =
+            row_inv_std * (q - mean_q - x_hat * mean_q_x_hat);
+    }
+}`;
+
+export const LAYERNORM_BACKWARD_PARAMS_SHADER = `
+@group(0) @binding(0) var<storage, read> grad_output_data: array<f32>;
+@group(0) @binding(1) var<storage, read> input_data: array<f32>;
+@group(0) @binding(2) var<storage, read> mean_data: array<f32>;
+@group(0) @binding(3) var<storage, read> inv_std_data: array<f32>;
+@group(0) @binding(4) var<storage, read_write> grad_gamma_data: array<f32>;
+@group(0) @binding(5) var<storage, read_write> grad_beta_data: array<f32>;
+@group(0) @binding(6) var<storage, read> params: array<u32>;
+${LAYERNORM_HELPERS}
+@compute @workgroup_size(${WORKGROUP_SIZE})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+    let col = gid.x;
+    let rows = params[0];
+    let features = params[1];
+    if (col >= features) { return; }
+    let rank = params[2];
+    let grad_output_feature_stride = params[${4 + MAX_DIMS}u + rank - 1u];
+    let input_feature_stride = params[${4 + MAX_DIMS * 2}u + rank - 1u];
+    var gamma_sum = 0.0;
+    var beta_sum = 0.0;
+    for (var row = 0u; row < rows; row++) {
+        let grad_output_base = layernorm_row_position(row, 4u, ${4 + MAX_DIMS}u, rank);
+        let input_base = layernorm_row_position(row, 4u, ${4 + MAX_DIMS * 2}u, rank);
+        let dy = grad_output_data[grad_output_base + col * grad_output_feature_stride];
+        let x_hat = (input_data[input_base + col * input_feature_stride]
+            - mean_data[row * params[${4 + MAX_DIMS * 3}]])
+            * inv_std_data[row * params[${5 + MAX_DIMS * 3}]];
+        gamma_sum += dy * x_hat;
+        beta_sum += dy;
+    }
+    grad_gamma_data[col * params[${6 + MAX_DIMS * 3}]] = gamma_sum;
+    grad_beta_data[col * params[${7 + MAX_DIMS * 3}]] = beta_sum;
+}`;
+
 export const FILL_SHADER = `
 @group(0) @binding(0) var<storage, read_write> data: array<f32>;
 struct Params { size: u32, value: f32 }

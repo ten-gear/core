@@ -430,3 +430,103 @@ test("embedding backward adds repeated token rows", () => {
         setBackendForTesting(previous);
     }
 });
+
+test("layernorm normalizes the last dimension through a strided view", () => {
+    const previous = getBackend();
+    setBackendForTesting(new CpuBackend());
+    try {
+        const stored = new TensorData(new Float32Array([
+            1, 2, 3,
+            4, 5, 6,
+            7, 8, 9,
+            10, 11, 12,
+        ]), [2, 2, 3]);
+        const input = new Tensor(stored.permute(1, 0, 2));
+        const gamma = new Tensor(new TensorData(new Float32Array([1.5, -0.5, 2]), [3]));
+        const beta = new Tensor(new TensorData(new Float32Array([0.25, 1, -1]), [3]));
+        const output = readStorage(input.layernorm(gamma, beta).data._storage);
+        const logicalInput = readStorage(tocontiguous(input.data)._storage);
+
+        for (let row = 0; row < 4; row++) {
+            const offset = row * 3;
+            const mean = (logicalInput[offset]! + logicalInput[offset + 1]! + logicalInput[offset + 2]!) / 3;
+            const variance = (
+                (logicalInput[offset]! - mean) ** 2 +
+                (logicalInput[offset + 1]! - mean) ** 2 +
+                (logicalInput[offset + 2]! - mean) ** 2
+            ) / 3;
+            const invStd = 1 / Math.sqrt(variance + 1e-5);
+            const expected = [
+                1.5 * (logicalInput[offset]! - mean) * invStd + 0.25,
+                -0.5 * (logicalInput[offset + 1]! - mean) * invStd + 1,
+                2 * (logicalInput[offset + 2]! - mean) * invStd - 1,
+            ];
+            expected.forEach((value, col) => expect(output[offset + col]).toBeCloseTo(value));
+        }
+    }
+    finally {
+        setBackendForTesting(previous);
+    }
+});
+
+test("layernorm backward matches finite differences", () => {
+    const previous = getBackend();
+    setBackendForTesting(new CpuBackend());
+    try {
+        const inputValues = new Float32Array([0.3, -1.2, 2.1, 1.5, 0.2, -0.7]);
+        const gammaValues = new Float32Array([1.1, -0.4, 0.8]);
+        const betaValues = new Float32Array([0.2, -0.3, 0.5]);
+        const upstream = new Float32Array([0.5, -1, 0.25, 1.5, 0.75, -0.5]);
+
+        const input = new Tensor(new TensorData(Float32Array.from(inputValues), [2, 3]));
+        const gamma = new Tensor(new TensorData(Float32Array.from(gammaValues), [3]));
+        const beta = new Tensor(new TensorData(Float32Array.from(betaValues), [3]));
+        input._requiresGrad(true);
+        gamma._requiresGrad(true);
+        beta._requiresGrad(true);
+        input.layernorm(gamma, beta).backward(
+            new Tensor(new TensorData(Float32Array.from(upstream), [2, 3])),
+        );
+
+        const loss = (x: Float32Array, g: Float32Array, b: Float32Array): number => {
+            const output = new Tensor(new TensorData(x, [2, 3])).layernorm(
+                new Tensor(new TensorData(g, [3])),
+                new Tensor(new TensorData(b, [3])),
+            );
+            const values = readStorage(output.data._storage);
+            let total = 0;
+            for (let i = 0; i < values.length; i++) total += values[i]! * upstream[i]!;
+            return total;
+        };
+        const finiteDifference = (
+            values: Float32Array, index: number,
+            evaluate: (changed: Float32Array) => number,
+        ): number => {
+            const epsilon = 1e-3;
+            const up = Float32Array.from(values);
+            const down = Float32Array.from(values);
+            up[index]! += epsilon;
+            down[index]! -= epsilon;
+            return (evaluate(up) - evaluate(down)) / (2 * epsilon);
+        };
+
+        const inputGrad = readStorage(input.grad!.data._storage);
+        for (let i = 0; i < inputValues.length; i++)
+            expect(inputGrad[i]).toBeCloseTo(finiteDifference(
+                inputValues, i, changed => loss(changed, gammaValues, betaValues),
+            ), 2);
+        const gammaGrad = readStorage(gamma.grad!.data._storage);
+        for (let i = 0; i < gammaValues.length; i++)
+            expect(gammaGrad[i]).toBeCloseTo(finiteDifference(
+                gammaValues, i, changed => loss(inputValues, changed, betaValues),
+            ), 2);
+        const betaGrad = readStorage(beta.grad!.data._storage);
+        for (let i = 0; i < betaValues.length; i++)
+            expect(betaGrad[i]).toBeCloseTo(finiteDifference(
+                betaValues, i, changed => loss(inputValues, gammaValues, changed),
+            ), 2);
+    }
+    finally {
+        setBackendForTesting(previous);
+    }
+});

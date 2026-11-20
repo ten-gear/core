@@ -4,6 +4,7 @@ import type {
 import {
     alignedMapShader, alignedZipShader, CONV1D_SHADER, CONV2D_SHADER, FILL_SHADER,
     EMBEDDING_BACKWARD_CONTIGUOUS_SHADER, EMBEDDING_BACKWARD_SHADER, EMBEDDING_CONTIGUOUS_SHADER, EMBEDDING_SHADER, GATHER_SHADER, MATMUL_SHADER, MAX_DIMS, reduceShader, SCATTER_SHADER, SGD_MOMENTUM_SHADER, SGD_SHADER,
+    LAYERNORM_BACKWARD_INPUT_SHADER, LAYERNORM_BACKWARD_PARAMS_SHADER, LAYERNORM_SHADER,
     stridedMapShader, stridedZipShader, WORKGROUP_SIZE,
 } from './webgpu_kernels.js';
 import { WebGPUStorage } from './webgpu_storage.js';
@@ -577,6 +578,111 @@ export class WebGpuBackend implements DeviceBackend {
             { binding: 3, resource: { buffer: params } },
         ], [Math.ceil(size / WORKGROUP_SIZE)], [params]);
         copies.forEach(copy => this.release(copy));
+    }
+
+    layernorm(outStorage: BackendStorage, outShape: Shape, outStride: Stride,
+        inputStorage: BackendStorage, inShape: Shape, inStride: Stride,
+        gammaStorage: BackendStorage, gammaShape: Shape, gammaStride: Stride,
+        betaStorage: BackendStorage, betaShape: Shape, betaStride: Stride,
+        meanStorage: BackendStorage, meanShape: Shape, meanStride: Stride,
+        invStdStorage: BackendStorage, invStdShape: Shape, invStdStride: Stride,
+        epsilon: number): void {
+        if (!same(outShape, inShape)) throw new Error('layernorm input/output shape mismatch');
+        if (inShape.length < 1) throw new Error('layernorm expects an input with rank at least 1');
+        if (inShape.length > MAX_DIMS) throw new Error(`WebGPU tensors support at most ${MAX_DIMS} dimensions`);
+        const features = inShape[inShape.length - 1]!;
+        if (features <= 0) throw new Error('layernorm requires a non-empty normalized dimension');
+        const rows = product(inShape) / features;
+        if (gammaShape.length !== 1 || gammaShape[0] !== features ||
+            betaShape.length !== 1 || betaShape[0] !== features)
+            throw new Error('layernorm gamma/beta shape mismatch');
+        if (meanShape.length !== 1 || meanShape[0] !== rows ||
+            invStdShape.length !== 1 || invStdShape[0] !== rows)
+            throw new Error('layernorm saved-stat shape mismatch');
+        if (!Number.isFinite(epsilon) || epsilon < 0)
+            throw new Error('layernorm expects a finite non-negative epsilon');
+        if (rows === 0) return;
+
+        const output = gpuStorage(outStorage), input = gpuStorage(inputStorage);
+        const gamma = gpuStorage(gammaStorage), beta = gpuStorage(betaStorage);
+        const mean = gpuStorage(meanStorage), invStd = gpuStorage(invStdStorage);
+        const params = this.params([
+            rows, features, inShape.length, floatBits(epsilon),
+            ...this.pad(outStride), ...this.pad(inShape), ...this.pad(inStride),
+            gammaStride[0]!, betaStride[0]!, meanStride[0]!, invStdStride[0]!,
+        ]);
+        this.submit('layernorm', LAYERNORM_SHADER, [
+            { binding: 0, resource: { buffer: input.buffer } },
+            { binding: 1, resource: { buffer: gamma.buffer } },
+            { binding: 2, resource: { buffer: beta.buffer } },
+            { binding: 3, resource: { buffer: output.buffer } },
+            { binding: 4, resource: { buffer: mean.buffer } },
+            { binding: 5, resource: { buffer: invStd.buffer } },
+            { binding: 6, resource: { buffer: params } },
+        ], [rows], [params]);
+    }
+
+    layernormBackward(
+        gradInputStorage: BackendStorage, gradInputShape: Shape, gradInputStride: Stride,
+        gradGammaStorage: BackendStorage, gradGammaShape: Shape, gradGammaStride: Stride,
+        gradBetaStorage: BackendStorage, gradBetaShape: Shape, gradBetaStride: Stride,
+        gradOutputStorage: BackendStorage, gradOutputShape: Shape, gradOutputStride: Stride,
+        inputStorage: BackendStorage, inShape: Shape, inStride: Stride,
+        gammaStorage: BackendStorage, gammaShape: Shape, gammaStride: Stride,
+        meanStorage: BackendStorage, meanShape: Shape, meanStride: Stride,
+        invStdStorage: BackendStorage, invStdShape: Shape, invStdStride: Stride,
+    ): void {
+        if (!same(gradInputShape, inShape) || !same(gradOutputShape, inShape))
+            throw new Error('layernormBackward input-gradient shape mismatch');
+        if (inShape.length < 1 || inShape.length > MAX_DIMS)
+            throw new Error(`WebGPU layernorm expects a rank between 1 and ${MAX_DIMS}`);
+        const features = inShape[inShape.length - 1]!;
+        if (features <= 0) throw new Error('layernormBackward requires a non-empty normalized dimension');
+        const rows = product(inShape) / features;
+        if (gammaShape.length !== 1 || gammaShape[0] !== features ||
+            gradGammaShape.length !== 1 || gradGammaShape[0] !== features ||
+            gradBetaShape.length !== 1 || gradBetaShape[0] !== features)
+            throw new Error('layernormBackward parameter shape mismatch');
+        if (meanShape.length !== 1 || meanShape[0] !== rows ||
+            invStdShape.length !== 1 || invStdShape[0] !== rows)
+            throw new Error('layernormBackward saved-stat shape mismatch');
+
+        const gradInput = gpuStorage(gradInputStorage), gradGamma = gpuStorage(gradGammaStorage);
+        const gradBeta = gpuStorage(gradBetaStorage), gradOutput = gpuStorage(gradOutputStorage);
+        const input = gpuStorage(inputStorage), gamma = gpuStorage(gammaStorage);
+        const mean = gpuStorage(meanStorage), invStd = gpuStorage(invStdStorage);
+        if (rows > 0) {
+            const inputParams = this.params([
+                rows, features, inShape.length, 0,
+                ...this.pad(gradInputStride), ...this.pad(inShape),
+                ...this.pad(gradOutputStride), ...this.pad(inStride),
+                meanStride[0]!, invStdStride[0]!, gammaStride[0]!,
+            ]);
+            this.submit('layernormBackward:input', LAYERNORM_BACKWARD_INPUT_SHADER, [
+                { binding: 0, resource: { buffer: gradOutput.buffer } },
+                { binding: 1, resource: { buffer: input.buffer } },
+                { binding: 2, resource: { buffer: gamma.buffer } },
+                { binding: 3, resource: { buffer: mean.buffer } },
+                { binding: 4, resource: { buffer: invStd.buffer } },
+                { binding: 5, resource: { buffer: gradInput.buffer } },
+                { binding: 6, resource: { buffer: inputParams } },
+            ], [rows], [inputParams]);
+        }
+
+        const paramParams = this.params([
+            rows, features, inShape.length, 0,
+            ...this.pad(inShape), ...this.pad(gradOutputStride), ...this.pad(inStride),
+            meanStride[0]!, invStdStride[0]!, gradGammaStride[0]!, gradBetaStride[0]!,
+        ]);
+        this.submit('layernormBackward:params', LAYERNORM_BACKWARD_PARAMS_SHADER, [
+            { binding: 0, resource: { buffer: gradOutput.buffer } },
+            { binding: 1, resource: { buffer: input.buffer } },
+            { binding: 2, resource: { buffer: mean.buffer } },
+            { binding: 3, resource: { buffer: invStd.buffer } },
+            { binding: 4, resource: { buffer: gradGamma.buffer } },
+            { binding: 5, resource: { buffer: gradBeta.buffer } },
+            { binding: 6, resource: { buffer: paramParams } },
+        ], [Math.ceil(features / WORKGROUP_SIZE)], [paramParams]);
     }
 }
 

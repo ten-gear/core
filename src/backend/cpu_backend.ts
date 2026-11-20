@@ -53,6 +53,36 @@ function leadingOffset(index: number[], stride: Stride, count: number): number {
     return position;
 }
 
+function rowOffset(row: number, shape: Shape, stride: Stride): number {
+    let position = 0;
+    for (let dim = shape.length - 2; dim >= 0; dim--) {
+        const index = row % shape[dim]!;
+        row = Math.trunc(row / shape[dim]!);
+        position += index * stride[dim]!;
+    }
+    return position;
+}
+
+function sameShape(a: Shape, b: Shape): boolean {
+    return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
+function layernormDimensions(
+    inputShape: Shape, gammaShape: Shape, meanShape: Shape, invStdShape: Shape,
+): [number, number] {
+    if (inputShape.length < 1) throw new Error('layernorm expects an input with rank at least 1');
+    if (gammaShape.length !== 1) throw new Error('layernorm expects gamma to have rank 1');
+    if (meanShape.length !== 1 || invStdShape.length !== 1)
+        throw new Error('layernorm expects mean and invStd to have rank 1');
+    const features = inputShape[inputShape.length - 1]!;
+    if (features <= 0) throw new Error('layernorm requires a non-empty normalized dimension');
+    if (gammaShape[0] !== features) throw new Error('layernorm gamma shape mismatch');
+    const rows = inputShape.reduce((size, dim) => size * dim, 1) / features;
+    if (meanShape[0] !== rows || invStdShape[0] !== rows)
+        throw new Error('layernorm saved-stat shape mismatch');
+    return [rows, features];
+}
+
 export class CpuBackend implements DeviceBackend {
     readonly kind = 'cpu' as const;
     readonly supportsSynchronousRead = true;
@@ -340,6 +370,111 @@ export class CpuBackend implements DeviceBackend {
             const token = Math.trunc(index[leadingOffset(gradIndex, indiciesStride, indiciesShape.length)]!);
             const feature = gradIndex[gradShape.length - 1]!;
             rows[token * tableStride[0]! + feature * tableStride[1]!]! += gradient[gradPos]!;
+        }
+    }
+
+    layernorm(out: BackendStorage, outShape: Shape, outStride: Stride,
+        input: BackendStorage, inShape: Shape, inStride: Stride,
+        gamma: BackendStorage, gammaShape: Shape, gammaStride: Stride,
+        beta: BackendStorage, betaShape: Shape, betaStride: Stride,
+        mean: BackendStorage, meanShape: Shape, meanStride: Stride,
+        invStd: BackendStorage, invStdShape: Shape, invStdStride: Stride,
+        epsilon: number): void {
+        if (!sameShape(outShape, inShape)) throw new Error('layernorm input/output shape mismatch');
+        const [rows, features] = layernormDimensions(inShape, gammaShape, meanShape, invStdShape);
+        if (betaShape.length !== 1 || betaShape[0] !== features)
+            throw new Error('layernorm beta shape mismatch');
+        if (!Number.isFinite(epsilon) || epsilon < 0)
+            throw new Error('layernorm expects a finite non-negative epsilon');
+
+        const output = host(out), x = host(input), scale = host(gamma), bias = host(beta);
+        const means = host(mean), inverseStd = host(invStd);
+        const inFeatureStride = inStride[inShape.length - 1]!;
+        const outFeatureStride = outStride[outShape.length - 1]!;
+        for (let row = 0; row < rows; row++) {
+            const inBase = rowOffset(row, inShape, inStride);
+            const outBase = rowOffset(row, outShape, outStride);
+            let rowMean = 0;
+            let m2 = 0;
+            for (let col = 0; col < features; col++) {
+                const value = x[inBase + col * inFeatureStride]!;
+                const count = col + 1;
+                const delta = value - rowMean;
+                rowMean += delta / count;
+                m2 += delta * (value - rowMean);
+            }
+            const rowInvStd = 1 / Math.sqrt(m2 / features + epsilon);
+            for (let col = 0; col < features; col++) {
+                const xHat = (x[inBase + col * inFeatureStride]! - rowMean) * rowInvStd;
+                output[outBase + col * outFeatureStride] =
+                    scale[col * gammaStride[0]!]! * xHat + bias[col * betaStride[0]!]!;
+            }
+            means[row * meanStride[0]!] = rowMean;
+            inverseStd[row * invStdStride[0]!] = rowInvStd;
+        }
+    }
+
+    layernormBackward(
+        gradInput: BackendStorage, gradInputShape: Shape, gradInputStride: Stride,
+        gradGamma: BackendStorage, gradGammaShape: Shape, gradGammaStride: Stride,
+        gradBeta: BackendStorage, gradBetaShape: Shape, gradBetaStride: Stride,
+        gradOutput: BackendStorage, gradOutputShape: Shape, gradOutputStride: Stride,
+        input: BackendStorage, inShape: Shape, inStride: Stride,
+        gamma: BackendStorage, gammaShape: Shape, gammaStride: Stride,
+        mean: BackendStorage, meanShape: Shape, meanStride: Stride,
+        invStd: BackendStorage, invStdShape: Shape, invStdStride: Stride,
+    ): void {
+        if (!sameShape(gradInputShape, inShape) || !sameShape(gradOutputShape, inShape))
+            throw new Error('layernormBackward input-gradient shape mismatch');
+        const [rows, features] = layernormDimensions(inShape, gammaShape, meanShape, invStdShape);
+        if (gradGammaShape.length !== 1 || gradGammaShape[0] !== features ||
+            gradBetaShape.length !== 1 || gradBetaShape[0] !== features)
+            throw new Error('layernormBackward parameter-gradient shape mismatch');
+
+        const dx = host(gradInput), dGamma = host(gradGamma), dBeta = host(gradBeta);
+        const dy = host(gradOutput), x = host(input), scale = host(gamma);
+        const means = host(mean), inverseStd = host(invStd);
+        const dxFeatureStride = gradInputStride[gradInputShape.length - 1]!;
+        const dyFeatureStride = gradOutputStride[gradOutputShape.length - 1]!;
+        const inFeatureStride = inStride[inShape.length - 1]!;
+
+        for (let row = 0; row < rows; row++) {
+            const dxBase = rowOffset(row, gradInputShape, gradInputStride);
+            const dyBase = rowOffset(row, gradOutputShape, gradOutputStride);
+            const inBase = rowOffset(row, inShape, inStride);
+            const rowMean = means[row * meanStride[0]!]!;
+            const rowInvStd = inverseStd[row * invStdStride[0]!]!;
+            let sumQ = 0;
+            let sumQXHat = 0;
+            for (let col = 0; col < features; col++) {
+                const xHat = (x[inBase + col * inFeatureStride]! - rowMean) * rowInvStd;
+                const q = dy[dyBase + col * dyFeatureStride]! * scale[col * gammaStride[0]!]!;
+                sumQ += q;
+                sumQXHat += q * xHat;
+            }
+            const meanQ = sumQ / features;
+            const meanQXHat = sumQXHat / features;
+            for (let col = 0; col < features; col++) {
+                const xHat = (x[inBase + col * inFeatureStride]! - rowMean) * rowInvStd;
+                const q = dy[dyBase + col * dyFeatureStride]! * scale[col * gammaStride[0]!]!;
+                dx[dxBase + col * dxFeatureStride] = rowInvStd * (q - meanQ - xHat * meanQXHat);
+            }
+        }
+
+        for (let col = 0; col < features; col++) {
+            let gammaSum = 0;
+            let betaSum = 0;
+            for (let row = 0; row < rows; row++) {
+                const dyBase = rowOffset(row, gradOutputShape, gradOutputStride);
+                const inBase = rowOffset(row, inShape, inStride);
+                const gradient = dy[dyBase + col * dyFeatureStride]!;
+                const xHat = (x[inBase + col * inFeatureStride]!
+                    - means[row * meanStride[0]!]!) * inverseStd[row * invStdStride[0]!]!;
+                gammaSum += gradient * xHat;
+                betaSum += gradient;
+            }
+            dGamma[col * gradGammaStride[0]!] = gammaSum;
+            dBeta[col * gradBetaStride[0]!] = betaSum;
         }
     }
 }

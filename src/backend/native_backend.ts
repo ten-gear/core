@@ -133,4 +133,44 @@ export class NativeBackend implements DeviceBackend {
             features,
         );
     }
+
+    layernorm(out: BackendStorage, outShape: Shape, outStride: Stride,
+        input: BackendStorage, inShape: Shape, inStride: Stride,
+        gamma: BackendStorage, gammaShape: Shape, gammaStride: Stride,
+        beta: BackendStorage, betaShape: Shape, betaStride: Stride,
+        mean: BackendStorage, meanShape: Shape, meanStride: Stride,
+        invStd: BackendStorage, invStdShape: Shape, invStdStride: Stride,
+        epsilon: number): void {
+        this.addon.layernorm(
+            nativeStorage(out), outShape, outStride,
+            nativeStorage(input), inShape, inStride,
+            nativeStorage(gamma), gammaShape, gammaStride,
+            nativeStorage(beta), betaShape, betaStride,
+            nativeStorage(mean), meanShape, meanStride,
+            nativeStorage(invStd), invStdShape, invStdStride,
+            epsilon,
+        );
+    }
+
+    layernormBackward(
+        gradInput: BackendStorage, gradInputShape: Shape, gradInputStride: Stride,
+        gradGamma: BackendStorage, gradGammaShape: Shape, gradGammaStride: Stride,
+        gradBeta: BackendStorage, gradBetaShape: Shape, gradBetaStride: Stride,
+        gradOutput: BackendStorage, gradOutputShape: Shape, gradOutputStride: Stride,
+        input: BackendStorage, inShape: Shape, inStride: Stride,
+        gamma: BackendStorage, gammaShape: Shape, gammaStride: Stride,
+        mean: BackendStorage, meanShape: Shape, meanStride: Stride,
+        invStd: BackendStorage, invStdShape: Shape, invStdStride: Stride,
+    ): void {
+        this.addon.layernormBackward(
+            nativeStorage(gradInput), gradInputShape, gradInputStride,
+            nativeStorage(gradGamma), gradGammaShape, gradGammaStride,
+            nativeStorage(gradBeta), gradBetaShape, gradBetaStride,
+            nativeStorage(gradOutput), gradOutputShape, gradOutputStride,
+            nativeStorage(input), inShape, inStride,
+            nativeStorage(gamma), gammaShape, gammaStride,
+            nativeStorage(mean), meanShape, meanStride,
+            nativeStorage(invStd), invStdShape, invStdStride,
+        );
+    }
 }

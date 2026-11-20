@@ -573,6 +573,95 @@ Napi::Value bind_embedding_backward(const Napi::CallbackInfo& info){
     return env.Undefined();
 }
 
+Napi::Value bind_layernorm(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() != 19) {
+        throw Napi::TypeError::New(env,
+            "layernorm expects (out, outShape, outStride, input, inShape, inStride, gamma, gammaShape, gammaStride, beta, betaShape, betaStride, mean, meanShape, meanStride, invStd, invStdShape, invStdStride, epsilon)");
+    }
+
+    std::vector<int32_t> out_shape = read_i32_array(env, info[1], "outShape");
+    std::vector<int32_t> out_stride = read_i32_array(env, info[2], "outStride");
+    std::vector<int32_t> in_shape = read_i32_array(env, info[4], "inShape");
+    std::vector<int32_t> in_stride = read_i32_array(env, info[5], "inStride");
+    std::vector<int32_t> gamma_shape = read_i32_array(env, info[7], "gammaShape");
+    std::vector<int32_t> gamma_stride = read_i32_array(env, info[8], "gammaStride");
+    std::vector<int32_t> beta_shape = read_i32_array(env, info[10], "betaShape");
+    std::vector<int32_t> beta_stride = read_i32_array(env, info[11], "betaStride");
+    std::vector<int32_t> mean_shape = read_i32_array(env, info[13], "meanShape");
+    std::vector<int32_t> mean_stride = read_i32_array(env, info[14], "meanStride");
+    std::vector<int32_t> inv_std_shape = read_i32_array(env, info[16], "invStdShape");
+    std::vector<int32_t> inv_std_stride = read_i32_array(env, info[17], "invStdStride");
+
+    check_rank(env, out_shape, out_stride, "out");
+    check_rank(env, in_shape, in_stride, "input");
+    check_rank(env, gamma_shape, gamma_stride, "gamma");
+    check_rank(env, beta_shape, beta_stride, "beta");
+    check_rank(env, mean_shape, mean_stride, "mean");
+    check_rank(env, inv_std_shape, inv_std_stride, "invStd");
+    if (!info[18].IsNumber()) throw Napi::TypeError::New(env, "epsilon must be a number");
+
+    tsgrad::View out = make_view(env, info[0], out_shape, out_stride, "out");
+    tsgrad::View input = make_view(env, info[3], in_shape, in_stride, "input");
+    tsgrad::View gamma = make_view(env, info[6], gamma_shape, gamma_stride, "gamma");
+    tsgrad::View beta = make_view(env, info[9], beta_shape, beta_stride, "beta");
+    tsgrad::View mean = make_view(env, info[12], mean_shape, mean_stride, "mean");
+    tsgrad::View inv_std = make_view(env, info[15], inv_std_shape, inv_std_stride, "invStd");
+    const float epsilon = info[18].As<Napi::Number>().FloatValue();
+
+    call_native(env, [&](){ tsgrad::layernorm(out, input, gamma, beta, mean, inv_std, epsilon); });
+    return env.Undefined();
+}
+
+Napi::Value bind_layernorm_backward(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() != 24) {
+        throw Napi::TypeError::New(env,
+            "layernormBackward expects (gradIn, gradInShape, gradInStride, gradGamma, gradGammaShape, gradGammaStride, gradBeta, gradBetaShape, gradBetaStride, gradOut, gradOutShape, gradOutStride, input, inShape, inStride, gamma, gammaShape, gammaStride, mean, meanShape, meanStride, invStd, invStdShape, invStdStride)");
+    }
+
+    std::vector<int32_t> grad_in_shape = read_i32_array(env, info[1], "gradInShape");
+    std::vector<int32_t> grad_in_stride = read_i32_array(env, info[2], "gradInStride");
+    std::vector<int32_t> grad_gamma_shape = read_i32_array(env, info[4], "gradGammaShape");
+    std::vector<int32_t> grad_gamma_stride = read_i32_array(env, info[5], "gradGammaStride");
+    std::vector<int32_t> grad_beta_shape = read_i32_array(env, info[7], "gradBetaShape");
+    std::vector<int32_t> grad_beta_stride = read_i32_array(env, info[8], "gradBetaStride");
+    std::vector<int32_t> grad_out_shape = read_i32_array(env, info[10], "gradOutShape");
+    std::vector<int32_t> grad_out_stride = read_i32_array(env, info[11], "gradOutStride");
+    std::vector<int32_t> in_shape = read_i32_array(env, info[13], "inShape");
+    std::vector<int32_t> in_stride = read_i32_array(env, info[14], "inStride");
+    std::vector<int32_t> gamma_shape = read_i32_array(env, info[16], "gammaShape");
+    std::vector<int32_t> gamma_stride = read_i32_array(env, info[17], "gammaStride");
+    std::vector<int32_t> mean_shape = read_i32_array(env, info[19], "meanShape");
+    std::vector<int32_t> mean_stride = read_i32_array(env, info[20], "meanStride");
+    std::vector<int32_t> inv_std_shape = read_i32_array(env, info[22], "invStdShape");
+    std::vector<int32_t> inv_std_stride = read_i32_array(env, info[23], "invStdStride");
+
+    check_rank(env, grad_in_shape, grad_in_stride, "gradIn");
+    check_rank(env, grad_gamma_shape, grad_gamma_stride, "gradGamma");
+    check_rank(env, grad_beta_shape, grad_beta_stride, "gradBeta");
+    check_rank(env, grad_out_shape, grad_out_stride, "gradOut");
+    check_rank(env, in_shape, in_stride, "input");
+    check_rank(env, gamma_shape, gamma_stride, "gamma");
+    check_rank(env, mean_shape, mean_stride, "mean");
+    check_rank(env, inv_std_shape, inv_std_stride, "invStd");
+
+    tsgrad::View grad_in = make_view(env, info[0], grad_in_shape, grad_in_stride, "gradIn");
+    tsgrad::View grad_gamma = make_view(env, info[3], grad_gamma_shape, grad_gamma_stride, "gradGamma");
+    tsgrad::View grad_beta = make_view(env, info[6], grad_beta_shape, grad_beta_stride, "gradBeta");
+    tsgrad::View grad_out = make_view(env, info[9], grad_out_shape, grad_out_stride, "gradOut");
+    tsgrad::View input = make_view(env, info[12], in_shape, in_stride, "input");
+    tsgrad::View gamma = make_view(env, info[15], gamma_shape, gamma_stride, "gamma");
+    tsgrad::View mean = make_view(env, info[18], mean_shape, mean_stride, "mean");
+    tsgrad::View inv_std = make_view(env, info[21], inv_std_shape, inv_std_stride, "invStd");
+
+    call_native(env, [&](){
+        tsgrad::layernorm_backward(
+            grad_in, grad_gamma, grad_beta, grad_out, input, gamma, mean, inv_std);
+    });
+    return env.Undefined();
+}
+
 void export_conv(Napi::Env env, Napi::Object& exports, const char* name, ConvFn fn) {
     exports.Set(name, Napi::Function::New(env, [fn](const Napi::CallbackInfo& info) {
         return bind_conv(info, fn);
@@ -608,6 +697,8 @@ Napi::Object init(Napi::Env env, Napi::Object exports) {
     exports.Set("scatter", Napi::Function::New(env, bind_scatter));
     exports.Set("embedding", Napi::Function::New(env, bind_embedding));
     exports.Set("embeddingBackward", Napi::Function::New(env, bind_embedding_backward));
+    exports.Set("layernorm", Napi::Function::New(env, bind_layernorm));
+    exports.Set("layernormBackward", Napi::Function::New(env, bind_layernorm_backward));
     exports.Set("sgd", Napi::Function::New(env, bind_sgd));
     exports.Set("sgdMomentum", Napi::Function::New(env, bind_sgd_momentum));
     return exports;

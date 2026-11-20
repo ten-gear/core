@@ -28,6 +28,27 @@ export type ConvNative = (
     reverse: boolean,
 ) => void;
 
+export type LayerNormNative = (
+    out: NativeStorage, outShape: Shape, outStride: Stride,
+    input: NativeStorage, inShape: Shape, inStride: Stride,
+    gamma: NativeStorage, gammaShape: Shape, gammaStride: Stride,
+    beta: NativeStorage, betaShape: Shape, betaStride: Stride,
+    mean: NativeStorage, meanShape: Shape, meanStride: Stride,
+    invStd: NativeStorage, invStdShape: Shape, invStdStride: Stride,
+    epsilon: number,
+) => void;
+
+export type LayerNormBackwardNative = (
+    gradInput: NativeStorage, gradInputShape: Shape, gradInputStride: Stride,
+    gradGamma: NativeStorage, gradGammaShape: Shape, gradGammaStride: Stride,
+    gradBeta: NativeStorage, gradBetaShape: Shape, gradBetaStride: Stride,
+    gradOutput: NativeStorage, gradOutputShape: Shape, gradOutputStride: Stride,
+    input: NativeStorage, inShape: Shape, inStride: Stride,
+    gamma: NativeStorage, gammaShape: Shape, gammaStride: Stride,
+    mean: NativeStorage, meanShape: Shape, meanStride: Stride,
+    invStd: NativeStorage, invStdShape: Shape, invStdStride: Stride,
+) => void;
+
 // Names match the strings addon.cc puts on `exports`.
 export type NativeAddon = {
     mapNeg: MapNative;
@@ -94,6 +115,8 @@ export type NativeAddon = {
         grad: NativeStorage, gradShape: Shape, gradStride: Stride,
         features: number,
     ) => void;
+    layernorm: LayerNormNative;
+    layernormBackward: LayerNormBackwardNative;
 };
 
 // Set by initBackend(). Keeping this named export preserves the low-level

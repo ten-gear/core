@@ -5,7 +5,7 @@ import * as operators from "./operators.js";
 // swap out if wanted, tensor_ops has non-multithreaded, the fastTensor stuff is multithreaded
 //import { tensorMap, tensorZip, tensorReduce } from "./tensor_ops.js";
 //import {/*fastTensorMap as tensorMap, fastTensorZip as tensorZip, fastTensorReduce as tensorReduce, fastMatMul as matMul,*/ fastConv1d as tensorConv1d, fastConv2d as tensorConv2d} from "./fast_ops.js";
-import {tensorMap, tensorZip, tensorReduce, matMul, tensorConv1d, tensorConv2d, tensorGather, tensorScatter, tensorEmbedding, tensorEmbeddingBackward } from "./native_ops.js"
+import {tensorMap, tensorZip, tensorReduce, matMul, tensorConv1d, tensorConv2d, tensorGather, tensorScatter, tensorEmbedding, tensorEmbeddingBackward, tensorLayerNorm, tensorLayerNormBackward } from "./native_ops.js"
 import { randomFloat } from "./helperfunctions.js";
 
 export function neg(a: TensorData): TensorData{
@@ -235,6 +235,61 @@ export function embeddingBackward(table: TensorData, indicies: TensorData, grad:
     const features = table._shape[1]!;
     tensorEmbeddingBackward(table._storage, table._shape, table._stride, indicies._storage, indicies._shape, indicies._stride, grad._storage, grad._shape, grad._stride, features);
     return table;
+}
+
+export type LayerNormForwardResult = {
+    output: TensorData;
+    mean: TensorData;
+    invStd: TensorData;
+};
+
+// Normalize the final input dimension. Statistics are returned for the fused backward pass.
+export function layernorm(
+    input: TensorData, gamma: TensorData, beta: TensorData, epsilon: number = 1e-5,
+): LayerNormForwardResult {
+    if (input._shape.length < 1) throw new Error('layernorm expects an input with rank at least 1');
+    const features = input._shape[input._shape.length - 1]!;
+    if (features <= 0) throw new Error('layernorm requires a non-empty normalized dimension');
+    if (gamma._shape.length !== 1 || gamma._shape[0] !== features ||
+        beta._shape.length !== 1 || beta._shape[0] !== features)
+        throw new Error('layernorm gamma and beta must be rank-1 tensors matching the final input dimension');
+    if (!Number.isFinite(epsilon) || epsilon < 0)
+        throw new Error('layernorm expects a finite non-negative epsilon');
+
+    const rows = input.size / features;
+    const output = TensorData.empty(input.shape);
+    const mean = TensorData.empty([rows]);
+    const invStd = TensorData.empty([rows]);
+    tensorLayerNorm(
+        output._storage, output._shape, output._stride,
+        input._storage, input._shape, input._stride,
+        gamma._storage, gamma._shape, gamma._stride,
+        beta._storage, beta._shape, beta._stride,
+        mean._storage, mean._shape, mean._stride,
+        invStd._storage, invStd._shape, invStd._stride,
+        epsilon,
+    );
+    return { output, mean, invStd };
+}
+
+export function layernormBackward(
+    gradOutput: TensorData, input: TensorData, gamma: TensorData,
+    mean: TensorData, invStd: TensorData,
+): [TensorData, TensorData, TensorData] {
+    const gradInput = TensorData.empty(input.shape);
+    const gradGamma = TensorData.empty(gamma.shape);
+    const gradBeta = TensorData.empty(gamma.shape);
+    tensorLayerNormBackward(
+        gradInput._storage, gradInput._shape, gradInput._stride,
+        gradGamma._storage, gradGamma._shape, gradGamma._stride,
+        gradBeta._storage, gradBeta._shape, gradBeta._stride,
+        gradOutput._storage, gradOutput._shape, gradOutput._stride,
+        input._storage, input._shape, input._stride,
+        gamma._storage, gamma._shape, gamma._stride,
+        mean._storage, mean._shape, mean._stride,
+        invStd._storage, invStd._shape, invStd._stride,
+    );
+    return [gradInput, gradGamma, gradBeta];
 }
 
 export abstract class TensorFunction{
@@ -540,6 +595,29 @@ export class Embedding extends TensorFunction{
         const gradTable = new Tensor(TensorData.fill(table.shape(), 0));
         return [new Tensor(TensorData.fill(indicies.shape(), 0)) , new Tensor(embeddingBackward(gradTable.data, indicies.data, gradOutput.data))];
     }
+}
+
+export function LayerNorm(epsilon: number = 1e-5): typeof TensorFunction {
+    return class extends TensorFunction {
+        static forward(ctx: Context, input: Tensor, gamma: Tensor, beta: Tensor): Tensor {
+            const result = layernorm(input.data, gamma.data, beta.data, epsilon);
+            if (ctx.noGrad) {
+                result.mean.release();
+                result.invStd.release();
+            } else {
+                ctx.saveForBackward(
+                    input, gamma, new Tensor(result.mean), new Tensor(result.invStd)
+                );
+            }
+            return new Tensor(result.output);
+        }
+
+        static backward(ctx: Context, gradOutput: Tensor): Tensor[] {
+            const [input, gamma, mean, invStd] = ctx.savedValues as Tensor[];
+            const [gradInput, gradGamma, gradBeta] = layernormBackward(gradOutput.data, input.data, gamma.data, mean.data, invStd.data);
+            return [new Tensor(gradInput), new Tensor(gradGamma), new Tensor(gradBeta)];
+        }
+    };
 }
 
 export function Gather(dim: number): typeof TensorFunction {

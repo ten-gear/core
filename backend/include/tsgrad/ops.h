@@ -79,6 +79,18 @@ void embedding(const View& out, const View& indicies, const View& table, const i
 // Adds into the values already in table. Duplicate ids add.
 void embedding_backward(const View& table, const View& indicies, const View& grad, const int32_t features);
 
+// Normalize the last input dimension. out/in have the same rank and shape.
+// gamma/beta are [features]. mean/inv_std are [product(leading dimensions)].
+void layernorm(
+    const View& out, const View& in, const View& gamma, const View& beta,
+    const View& mean, const View& inv_std, float epsilon);
+
+// Writes all three gradients; it does not add to their previous values.
+void layernorm_backward(
+    const View& grad_in, const View& grad_gamma, const View& grad_beta,
+    const View& grad_out, const View& in, const View& gamma,
+    const View& mean, const View& inv_std);
+
 // Same signatures as above. Defined in src/cuda/*.cu when TSGRAD_HAS_CUDA is set.
 // On a CUDA build View::data is already a device pointer. The .cu function
 // launches on the process-wide stream and returns without waiting. It does not
@@ -139,6 +151,14 @@ void gather(const View& out, const View& indicies, const View& values, const int
 void scatter(const View& out, const View& indicies, const View& grad, const int32_t dim);
 void embedding(const View& out, const View& indicies, const View& table, const int32_t features);
 void embedding_backward(const View& table, const View& indicies, const View& grad, const int32_t features);
+
+void layernorm(
+    const View& out, const View& in, const View& gamma, const View& beta,
+    const View& mean, const View& inv_std, float epsilon);
+void layernorm_backward(
+    const View& grad_in, const View& grad_gamma, const View& grad_beta,
+    const View& grad_out, const View& in, const View& gamma,
+    const View& mean, const View& inv_std);
 
 // Non-zero storage fill. Queued on the process-wide stream. Does not wait.
 void fill(float* data, size_t numel, float value);
