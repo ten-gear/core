@@ -138,4 +138,18 @@ export interface DeviceBackend {
         out: BackendStorage, outShape: Shape, outStride: Stride,
         dim: number,
     ): void;
+    rope(
+        out: BackendStorage, outShape: Shape, outStride: Stride,
+        input: BackendStorage, inShape: Shape, inStride: Stride,
+        sin: BackendStorage, sinShape: Shape, sinStride: Stride,
+        cos: BackendStorage, cosShape: Shape, cosStride: Stride,
+        offset: number,
+    ): void;
+    ropeBackward(
+        gradInput: BackendStorage, gradInputShape: Shape, gradInputStride: Stride,
+        gradOutput: BackendStorage, gradOutputShape: Shape, gradOutputStride: Stride,
+        sin: BackendStorage, sinShape: Shape, sinStride: Stride,
+        cos: BackendStorage, cosShape: Shape, cosStride: Stride,
+        offset: number,
+    ): void;
 }

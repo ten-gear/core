@@ -103,6 +103,12 @@ void softmax_backward(const View& grad_in, const View& grad_out, const View& out
 void logsoftmax(const View& out, const View& input, int32_t dim);
 void logsoftmax_backward(const View& grad_in, const View& grad_out, const View& out, int32_t dim);
 
+// Rotate pairs in the last dimension. in and out are [..., seq, headDim], headDim even.
+// sin and cos are [positions, headDim/2]. Token t reads table row t + offset.
+// Leading dimensions are independent rows. Strides included. Writes out; it does not add.
+void rope(const View& out, const View& in, const View& sin, const View& cos, int32_t offset);
+void rope_backward(const View& grad_in, const View& grad_out, const View& sin, const View& cos, int32_t offset);
+
 // Same signatures as above. Defined in src/cuda/*.cu when TSGRAD_HAS_CUDA is set.
 // On a CUDA build View::data is already a device pointer. The .cu function
 // launches on the process-wide stream and returns without waiting. It does not
@@ -184,6 +190,9 @@ void softmax_backward(
 void logsoftmax(const View& out, const View& input, int32_t dim);
 void logsoftmax_backward(
     const View& grad_in, const View& grad_out, const View& out, int32_t dim);
+
+void rope(const View& out, const View& in, const View& sin, const View& cos, int32_t offset);
+void rope_backward(const View& grad_in, const View& grad_out, const View& sin, const View& cos, int32_t offset);
 
 // Non-zero storage fill. Queued on the process-wide stream. Does not wait.
 void fill(float* data, size_t numel, float value);

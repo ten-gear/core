@@ -228,4 +228,33 @@ export class NativeBackend implements DeviceBackend {
             nativeStorage(out), outShape, outStride, dim,
         );
     }
+
+    rope(out: BackendStorage, outShape: Shape, outStride: Stride,
+        input: BackendStorage, inShape: Shape, inStride: Stride,
+        sin: BackendStorage, sinShape: Shape, sinStride: Stride,
+        cos: BackendStorage, cosShape: Shape, cosStride: Stride,
+        offset: number): void {
+        this.addon.rope(
+            nativeStorage(out), outShape, outStride,
+            nativeStorage(input), inShape, inStride,
+            nativeStorage(sin), sinShape, sinStride,
+            nativeStorage(cos), cosShape, cosStride,
+            offset,
+        );
+    }
+
+    ropeBackward(
+        gradInput: BackendStorage, gradInputShape: Shape, gradInputStride: Stride,
+        gradOutput: BackendStorage, gradOutputShape: Shape, gradOutputStride: Stride,
+        sin: BackendStorage, sinShape: Shape, sinStride: Stride,
+        cos: BackendStorage, cosShape: Shape, cosStride: Stride,
+        offset: number): void {
+        this.addon.ropeBackward(
+            nativeStorage(gradInput), gradInputShape, gradInputStride,
+            nativeStorage(gradOutput), gradOutputShape, gradOutputStride,
+            nativeStorage(sin), sinShape, sinStride,
+            nativeStorage(cos), cosShape, cosStride,
+            offset,
+        );
+    }
 }

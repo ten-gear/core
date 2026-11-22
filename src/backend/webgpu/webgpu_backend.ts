@@ -5,7 +5,7 @@ import {
     ADAMW_SHADER, alignedMapShader, alignedZipShader, CONV1D_SHADER, CONV2D_SHADER, FILL_SHADER,
     EMBEDDING_BACKWARD_CONTIGUOUS_SHADER, EMBEDDING_BACKWARD_SHADER, EMBEDDING_CONTIGUOUS_SHADER, EMBEDDING_SHADER, GATHER_SHADER, MATMUL_SHADER, MAX_DIMS, reduceShader, SCATTER_SHADER, SGD_MOMENTUM_SHADER, SGD_SHADER,
     LAYERNORM_BACKWARD_INPUT_SHADER, LAYERNORM_BACKWARD_PARAMS_SHADER, LAYERNORM_SHADER,
-    softmaxBackwardShader, softmaxShader, stridedMapShader, stridedZipShader, WORKGROUP_SIZE,
+    ropeShader, softmaxBackwardShader, softmaxShader, stridedMapShader, stridedZipShader, WORKGROUP_SIZE,
 } from './webgpu_kernels.js';
 import { WebGPUStorage } from './webgpu_storage.js';
 
@@ -798,6 +798,66 @@ export class WebGpuBackend implements DeviceBackend {
             gradOutput, gradOutputShape, gradOutputStride,
             out, outShape, outStride, dim, 'logSoftmaxBackward',
         );
+    }
+
+    private ropeImpl(backward: boolean,
+        outStorage: BackendStorage, outShape: Shape, outStride: Stride,
+        inputStorage: BackendStorage, inShape: Shape, inStride: Stride,
+        sinStorage: BackendStorage, sinShape: Shape, sinStride: Stride,
+        cosStorage: BackendStorage, cosShape: Shape, cosStride: Stride,
+        offset: number): void {
+        if (!same(outShape, inShape)) throw new Error('rope input/output shape mismatch');
+        if (inShape.length < 2 || inShape.length > MAX_DIMS)
+            throw new Error(`WebGPU rope expects a rank between 2 and ${MAX_DIMS}`);
+        const features = inShape[inShape.length - 1]!;
+        if (features <= 0 || features % 2 !== 0)
+            throw new Error('rope expects an even, non-empty head dimension');
+        if (!Number.isInteger(offset) || offset < 0)
+            throw new Error('rope expects a non-negative integer offset');
+        const half = features / 2;
+        const sequence = inShape[inShape.length - 2]!;
+        if (sinShape.length !== 2 || cosShape.length !== 2
+            || sinShape[1] !== half || cosShape[1] !== half
+            || sinShape[0]! < sequence + offset || cosShape[0]! < sequence + offset)
+            throw new Error('rope received invalid sin/cos shapes');
+        const size = product(inShape);
+        if (size === 0) return;
+
+        const out = gpuStorage(outStorage), input = gpuStorage(inputStorage);
+        const sin = gpuStorage(sinStorage), cos = gpuStorage(cosStorage);
+        const params = this.params([
+            size, inShape.length, features, half, offset,
+            ...this.pad(inShape), ...this.pad(outStride), ...this.pad(inStride),
+            sinStride[0]!, sinStride[1]!, cosStride[0]!, cosStride[1]!,
+        ]);
+        this.submit(backward ? 'ropeBackward' : 'rope', ropeShader(backward), [
+            { binding: 0, resource: { buffer: input.buffer } },
+            { binding: 1, resource: { buffer: sin.buffer } },
+            { binding: 2, resource: { buffer: cos.buffer } },
+            { binding: 3, resource: { buffer: out.buffer } },
+            { binding: 4, resource: { buffer: params } },
+        ], [Math.ceil(size / WORKGROUP_SIZE)], [params]);
+    }
+
+    rope(out: BackendStorage, outShape: Shape, outStride: Stride,
+        input: BackendStorage, inShape: Shape, inStride: Stride,
+        sin: BackendStorage, sinShape: Shape, sinStride: Stride,
+        cos: BackendStorage, cosShape: Shape, cosStride: Stride,
+        offset: number): void {
+        this.ropeImpl(false, out, outShape, outStride, input, inShape, inStride,
+            sin, sinShape, sinStride, cos, cosShape, cosStride, offset);
+    }
+
+    ropeBackward(
+        gradInput: BackendStorage, gradInputShape: Shape, gradInputStride: Stride,
+        gradOutput: BackendStorage, gradOutputShape: Shape, gradOutputStride: Stride,
+        sin: BackendStorage, sinShape: Shape, sinStride: Stride,
+        cos: BackendStorage, cosShape: Shape, cosStride: Stride,
+        offset: number): void {
+        this.ropeImpl(true,
+            gradInput, gradInputShape, gradInputStride,
+            gradOutput, gradOutputShape, gradOutputStride,
+            sin, sinShape, sinStride, cos, cosShape, cosStride, offset);
     }
 }
 

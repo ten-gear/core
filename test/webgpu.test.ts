@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, test } from 'vitest';
 import { setBackendForTesting } from '../src/backend/index.js';
 import { tryCreateWebGpuBackend, WebGpuBackend } from '../src/backend/webgpu/webgpu_backend.js';
 import { Tensor } from '../src/tensor.js';
-import { conv1d, embedding, embeddingBackward, gather, logsoftmax, scatter, softmax, tocontiguous } from '../src/tensor_functions.js';
+import { conv1d, embedding, embeddingBackward, gather, logsoftmax, rope, scatter, softmax, tocontiguous } from '../src/tensor_functions.js';
 import { readStorageAsync, TensorData } from '../src/tensor_data.js';
 
 const backend = await tryCreateWebGpuBackend();
@@ -300,6 +300,24 @@ describe.skipIf(!backend)('WebGPU backend', () => {
             dimProbabilities[1]!, dimProbabilities[1]!,
             dimProbabilities[2]!, dimProbabilities[2]!,
         ]);
+    });
+
+    test('runs RoPE forward and backward with an offset', async () => {
+        const input = new Tensor(new TensorData(
+            new Float32Array([1, 2, 3, 4, 5, 6, 7, 8]), [1, 2, 4],
+        ));
+        const sin = new Tensor(new TensorData(
+            new Float32Array([0, 0, 1, 0, 0, 1]), [3, 2],
+        ));
+        const cos = new Tensor(new TensorData(
+            new Float32Array([1, 1, 0, 1, 1, 0]), [3, 2],
+        ));
+        input._requiresGrad(true);
+
+        const output = rope(input, sin, cos, 1);
+        expectClose(await output.toFloat32(), [-3, 2, 1, 4, 5, -8, 7, 6]);
+        output.backward(new Tensor(TensorData.fill([1, 2, 4], 1)));
+        expectClose(await input.grad!.toFloat32(), [1, 1, -1, 1, 1, 1, 1, -1]);
     });
 
     test('reuses pooled buffers without violating queue order', async () => {

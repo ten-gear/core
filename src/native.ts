@@ -56,6 +56,14 @@ export type SoftmaxBackwardNative = (
     dim: number,
 ) => void;
 
+export type RopeNative = (
+    out: NativeStorage, outShape: Shape, outStride: Stride,
+    input: NativeStorage, inShape: Shape, inStride: Stride,
+    sin: NativeStorage, sinShape: Shape, sinStride: Stride,
+    cos: NativeStorage, cosShape: Shape, cosStride: Stride,
+    offset: number,
+) => void;
+
 // Names match the strings addon.cc puts on `exports`.
 export type NativeAddon = {
     mapNeg: MapNative;
@@ -140,6 +148,8 @@ export type NativeAddon = {
     softmaxBackward: SoftmaxBackwardNative;
     logSoftmax: ReduceNative;
     logSoftmaxBackward: SoftmaxBackwardNative;
+    rope: RopeNative;
+    ropeBackward: RopeNative;
 };
 
 // Set by initBackend(). Keeping this named export preserves the low-level

@@ -305,6 +305,7 @@ using ZipFn = void (*)(const tsgrad::View&, const tsgrad::View&, const tsgrad::V
 using ReduceFn = void (*)(const tsgrad::View&, const tsgrad::View&, int32_t);
 using ConvFn = void (*)(const tsgrad::View&, const tsgrad::View&, const tsgrad::View&, bool);
 using SoftmaxBackwardFn = void (*)(const tsgrad::View&, const tsgrad::View&, const tsgrad::View&, int32_t);
+using RopeFn = void (*)(const tsgrad::View&, const tsgrad::View&, const tsgrad::View&, const tsgrad::View&, int32_t);
 
 template <typename Fn>
 void call_native(Napi::Env env, Fn&& fn) {
@@ -738,6 +739,40 @@ void export_softmax_backward(
     }));
 }
 
+Napi::Value bind_rope(const Napi::CallbackInfo& info, RopeFn fn, const char* operation) {
+    Napi::Env env = info.Env();
+    if (info.Length() != 13) {
+        throw Napi::TypeError::New(env, std::string(operation) +
+            " expects (out, outShape, outStride, input, inShape, inStride, sin, sinShape, sinStride, cos, cosShape, cosStride, offset)");
+    }
+    std::vector<int32_t> out_shape = read_i32_array(env, info[1], "outShape");
+    std::vector<int32_t> out_stride = read_i32_array(env, info[2], "outStride");
+    std::vector<int32_t> in_shape = read_i32_array(env, info[4], "inShape");
+    std::vector<int32_t> in_stride = read_i32_array(env, info[5], "inStride");
+    std::vector<int32_t> sin_shape = read_i32_array(env, info[7], "sinShape");
+    std::vector<int32_t> sin_stride = read_i32_array(env, info[8], "sinStride");
+    std::vector<int32_t> cos_shape = read_i32_array(env, info[10], "cosShape");
+    std::vector<int32_t> cos_stride = read_i32_array(env, info[11], "cosStride");
+    const int32_t offset = read_i32_value(env, info[12], "offset");
+    check_rank(env, out_shape, out_stride, "out");
+    check_rank(env, in_shape, in_stride, "input");
+    check_rank(env, sin_shape, sin_stride, "sin");
+    check_rank(env, cos_shape, cos_stride, "cos");
+
+    tsgrad::View out = make_view(env, info[0], out_shape, out_stride, "out");
+    tsgrad::View input = make_view(env, info[3], in_shape, in_stride, "input");
+    tsgrad::View sin = make_view(env, info[6], sin_shape, sin_stride, "sin");
+    tsgrad::View cos = make_view(env, info[9], cos_shape, cos_stride, "cos");
+    call_native(env, [&](){ fn(out, input, sin, cos, offset); });
+    return env.Undefined();
+}
+
+void export_rope(Napi::Env env, Napi::Object& exports, const char* name, RopeFn fn) {
+    exports.Set(name, Napi::Function::New(env, [fn, name](const Napi::CallbackInfo& info) {
+        return bind_rope(info, fn, name);
+    }));
+}
+
 void export_conv(Napi::Env env, Napi::Object& exports, const char* name, ConvFn fn) {
     exports.Set(name, Napi::Function::New(env, [fn](const Napi::CallbackInfo& info) {
         return bind_conv(info, fn);
@@ -774,6 +809,8 @@ Napi::Object init(Napi::Env env, Napi::Object exports) {
     export_reduce(env, exports, "logSoftmax", tsgrad::logsoftmax);
     export_softmax_backward(env, exports, "softmaxBackward", tsgrad::softmax_backward);
     export_softmax_backward(env, exports, "logSoftmaxBackward", tsgrad::logsoftmax_backward);
+    export_rope(env, exports, "rope", tsgrad::rope);
+    export_rope(env, exports, "ropeBackward", tsgrad::rope_backward);
 
     export_zip(env, exports, "matmul", tsgrad::matmul);
     export_conv(env, exports, "conv1d", tsgrad::conv1d);

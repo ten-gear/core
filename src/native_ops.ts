@@ -207,6 +207,38 @@ export function tensorLogSoftmaxBackward(
     );
 }
 
+export function tensorRoPE(
+    out: TensorBuffer, outShape: Shape, outStride: Stride,
+    input: TensorBuffer, inShape: Shape, inStride: Stride,
+    sin: TensorBuffer, sinShape: Shape, sinStride: Stride,
+    cos: TensorBuffer, cosShape: Shape, cosStride: Stride,
+    offset: number,
+): void {
+    getBackend().rope(
+        out, outShape, outStride,
+        input, inShape, inStride,
+        sin, sinShape, sinStride,
+        cos, cosShape, cosStride,
+        offset,
+    );
+}
+
+export function tensorRoPEBackward(
+    gradInput: TensorBuffer, gradInputShape: Shape, gradInputStride: Stride,
+    gradOutput: TensorBuffer, gradOutputShape: Shape, gradOutputStride: Stride,
+    sin: TensorBuffer, sinShape: Shape, sinStride: Stride,
+    cos: TensorBuffer, cosShape: Shape, cosStride: Stride,
+    offset: number,
+): void {
+    getBackend().ropeBackward(
+        gradInput, gradInputShape, gradInputStride,
+        gradOutput, gradOutputShape, gradOutputStride,
+        sin, sinShape, sinStride,
+        cos, cosShape, cosStride,
+        offset,
+    );
+}
+
 export function tensorGather(
     out: TensorBuffer, outShape: Shape, outStride: Stride,
     indicies: TensorBuffer, indiciesShape: Shape, indiciesStride: Stride,

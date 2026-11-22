@@ -2,7 +2,7 @@ import { randomFloat } from "./helperfunctions.js";
 import { Parameter } from "./module.js";
 import { Layer } from "./model.js";
 import { Tensor } from "./tensor.js";
-import { logsoftmax, maxpool2d } from "./tensor_functions.js";
+import { logsoftmax, maxpool2d, rope } from "./tensor_functions.js";
 import { Shape, TensorData, writeStorage } from "./tensor_data.js";
 
 function heParameter(fanIn: number, shape: Shape): Tensor {
@@ -22,6 +22,54 @@ function zeroParameter(shape: Shape): Tensor {
     const tensor = new Tensor(TensorData.fill(shape, 0));
     tensor._requiresGrad(true);
     return tensor;
+}
+
+export function ropeFrequencies(seq: number, headDim: number, theta = 10000): { cos: Tensor; sin: Tensor } {
+    if (!Number.isInteger(seq) || seq < 1)
+        throw new Error("ropeFrequencies expects a positive integer sequence length");
+    if (!Number.isInteger(headDim) || headDim < 2 || headDim % 2 !== 0)
+        throw new Error("ropeFrequencies expects a positive even head dimension");
+    if (!Number.isFinite(theta) || theta <= 0)
+        throw new Error("ropeFrequencies expects a positive finite theta");
+
+    const half = headDim / 2;
+    const cosValues = new Float32Array(seq * half);
+    const sinValues = new Float32Array(seq * half);
+    for (let i = 0; i < half; i++) {
+        const freq = theta ** (-2 * i / headDim);
+        for (let t = 0; t < seq; t++) {
+            const angle = t * freq;
+            cosValues[t * half + i] = Math.cos(angle);
+            sinValues[t * half + i] = Math.sin(angle);
+        }
+    }
+    const cos = new Tensor(TensorData.empty([seq, half]));
+    const sin = new Tensor(TensorData.empty([seq, half]));
+    writeStorage(cos.data._storage, cosValues);
+    writeStorage(sin.data._storage, sinValues);
+    return { cos, sin };
+}
+
+export class RoPE extends Layer {
+    readonly seq: number;
+    readonly headDim: number;
+    readonly theta: number;
+    readonly cos: Tensor;
+    readonly sin: Tensor;
+
+    constructor(seq: number, headDim: number, theta: number = 10000) {
+        super();
+        this.seq = seq;
+        this.headDim = headDim;
+        this.theta = theta;
+        const frequencies = ropeFrequencies(seq, headDim, theta);
+        this.cos = frequencies.cos;
+        this.sin = frequencies.sin;
+    }
+
+    forward(input: Tensor, offset: number = 0): Tensor {
+        return rope(input, this.sin, this.cos, offset);
+    }
 }
 
 export class Linear extends Layer {

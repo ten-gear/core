@@ -616,4 +616,66 @@ export class CpuBackend implements DeviceBackend {
             out, outShape, outStride, dim, 'logSoftmaxBackward',
         );
     }
+
+    private ropeImpl(backward: boolean,
+        out: BackendStorage, outShape: Shape, outStride: Stride,
+        input: BackendStorage, inShape: Shape, inStride: Stride,
+        sin: BackendStorage, sinShape: Shape, sinStride: Stride,
+        cos: BackendStorage, cosShape: Shape, cosStride: Stride,
+        offset: number): void {
+        if (!sameShape(outShape, inShape)) throw new Error('rope input/output shape mismatch');
+        const features = inShape[inShape.length - 1]!;
+        if (inShape.length < 2 || features <= 0 || features % 2 !== 0)
+            throw new Error('rope expects [..., sequence, even head dimension]');
+        if (!Number.isInteger(offset) || offset < 0)
+            throw new Error('rope expects a non-negative integer offset');
+        const half = features / 2;
+        const sequence = inShape[inShape.length - 2]!;
+        if (sinShape.length !== 2 || cosShape.length !== 2
+            || sinShape[1] !== half || cosShape[1] !== half
+            || sinShape[0]! < sequence + offset || cosShape[0]! < sequence + offset)
+            throw new Error('rope received invalid sin/cos shapes');
+
+        const output = host(out), x = host(input), sinValues = host(sin), cosValues = host(cos);
+        const rows = inShape.reduce((total, size) => total * size, 1) / features;
+        for (let row = 0; row < rows; row++) {
+            const position = row % sequence + offset;
+            const inBase = rowOffset(row, inShape, inStride);
+            const outBase = rowOffset(row, outShape, outStride);
+            for (let col = 0; col < features; col++) {
+                const firstHalf = col < half;
+                const frequency = firstHalf ? col : col - half;
+                const partner = firstHalf ? col + half : col - half;
+                const sign = firstHalf
+                    ? (backward ? 1 : -1)
+                    : (backward ? -1 : 1);
+                const c = cosValues[position * cosStride[0]! + frequency * cosStride[1]!]!;
+                const s = sinValues[position * sinStride[0]! + frequency * sinStride[1]!]!;
+                output[outBase + col * outStride[outShape.length - 1]!] =
+                    x[inBase + col * inStride[inShape.length - 1]!]! * c
+                    + sign * x[inBase + partner * inStride[inShape.length - 1]!]! * s;
+            }
+        }
+    }
+
+    rope(out: BackendStorage, outShape: Shape, outStride: Stride,
+        input: BackendStorage, inShape: Shape, inStride: Stride,
+        sin: BackendStorage, sinShape: Shape, sinStride: Stride,
+        cos: BackendStorage, cosShape: Shape, cosStride: Stride,
+        offset: number): void {
+        this.ropeImpl(false, out, outShape, outStride, input, inShape, inStride,
+            sin, sinShape, sinStride, cos, cosShape, cosStride, offset);
+    }
+
+    ropeBackward(
+        gradInput: BackendStorage, gradInputShape: Shape, gradInputStride: Stride,
+        gradOutput: BackendStorage, gradOutputShape: Shape, gradOutputStride: Stride,
+        sin: BackendStorage, sinShape: Shape, sinStride: Stride,
+        cos: BackendStorage, cosShape: Shape, cosStride: Stride,
+        offset: number): void {
+        this.ropeImpl(true,
+            gradInput, gradInputShape, gradInputStride,
+            gradOutput, gradOutputShape, gradOutputStride,
+            sin, sinShape, sinStride, cos, cosShape, cosStride, offset);
+    }
 }

@@ -5,7 +5,7 @@ import * as operators from "./operators.js";
 // swap out if wanted, tensor_ops has non-multithreaded, the fastTensor stuff is multithreaded
 //import { tensorMap, tensorZip, tensorReduce } from "./tensor_ops.js";
 //import {/*fastTensorMap as tensorMap, fastTensorZip as tensorZip, fastTensorReduce as tensorReduce, fastMatMul as matMul,*/ fastConv1d as tensorConv1d, fastConv2d as tensorConv2d} from "./fast_ops.js";
-import {tensorMap, tensorZip, tensorReduce, matMul, tensorConv1d, tensorConv2d, tensorGather, tensorScatter, tensorEmbedding, tensorEmbeddingBackward, tensorLayerNorm, tensorLayerNormBackward, tensorSoftmax, tensorSoftmaxBackward, tensorLogSoftmax, tensorLogSoftmaxBackward } from "./native_ops.js"
+import {tensorMap, tensorZip, tensorReduce, matMul, tensorConv1d, tensorConv2d, tensorGather, tensorScatter, tensorEmbedding, tensorEmbeddingBackward, tensorLayerNorm, tensorLayerNormBackward, tensorSoftmax, tensorSoftmaxBackward, tensorLogSoftmax, tensorLogSoftmaxBackward, tensorRoPE, tensorRoPEBackward } from "./native_ops.js"
 import { randomFloat } from "./helperfunctions.js";
 
 export function neg(a: TensorData): TensorData{
@@ -380,6 +380,48 @@ export function logsoftmaxBackward(gradOutput: TensorData, out: TensorData, dim:
     return gradInput;
 }
 
+function validateRoPE(input: TensorData, sin: TensorData, cos: TensorData, offset: number): void {
+    const features = input._shape[input.dims - 1]!;
+    if (input.dims < 2 || features <= 0 || features % 2 !== 0)
+        throw new Error('rope expects [..., sequence, even head dimension]');
+    if (!Number.isInteger(offset) || offset < 0)
+        throw new Error('rope expects a non-negative integer offset');
+    const sequence = input._shape[input.dims - 2]!;
+    const half = features / 2;
+    if (sin.dims !== 2 || cos.dims !== 2
+        || sin._shape[1] !== half || cos._shape[1] !== half
+        || sin._shape[0]! < sequence + offset || cos._shape[0]! < sequence + offset)
+        throw new Error('rope received invalid sin/cos shapes');
+}
+
+export function ropeData(input: TensorData, sin: TensorData, cos: TensorData, offset: number): TensorData {
+    validateRoPE(input, sin, cos, offset);
+    const out = TensorData.empty(input.shape);
+    tensorRoPE(
+        out._storage, out._shape, out._stride,
+        input._storage, input._shape, input._stride,
+        sin._storage, sin._shape, sin._stride,
+        cos._storage, cos._shape, cos._stride,
+        offset,
+    );
+    return out;
+}
+
+export function ropeBackwardData(
+    gradOutput: TensorData, sin: TensorData, cos: TensorData, offset: number,
+): TensorData {
+    validateRoPE(gradOutput, sin, cos, offset);
+    const gradInput = TensorData.empty(gradOutput.shape);
+    tensorRoPEBackward(
+        gradInput._storage, gradInput._shape, gradInput._stride,
+        gradOutput._storage, gradOutput._shape, gradOutput._stride,
+        sin._storage, sin._shape, sin._stride,
+        cos._storage, cos._shape, cos._stride,
+        offset,
+    );
+    return gradInput;
+}
+
 export abstract class TensorFunction{
     static forward(ctx: Context, ...t: Tensor[]): Tensor{
         throw new Error("Subclass must create forward");
@@ -470,6 +512,10 @@ export function softmax(input: Tensor, dim: number): Tensor{
 
 export function logsoftmax(input: Tensor, dim: number): Tensor{
     return Tensor.apply(LogSoftmax(dim), input);
+}
+
+export function rope(input: Tensor, sin: Tensor, cos: Tensor, offset: number = 0): Tensor {
+    return Tensor.apply(RoPE(offset), input, sin, cos);
 }
 
 export class Neg extends TensorFunction{
@@ -768,6 +814,24 @@ export function LogSoftmax(dim: number): typeof TensorFunction {
         static backward(ctx: Context, gradOutput: Tensor): Tensor[] {
             const [result] = ctx.savedValues as Tensor[];
             return [new Tensor(logsoftmaxBackward(gradOutput.data, result.data, dim))];
+        }
+    };
+}
+
+export function RoPE(offset: number = 0): typeof TensorFunction {
+    return class extends TensorFunction {
+        static forward(ctx: Context, input: Tensor, sin: Tensor, cos: Tensor): Tensor {
+            ctx.saveForBackward(sin, cos);
+            return new Tensor(ropeData(input.data, sin.data, cos.data, offset));
+        }
+
+        static backward(ctx: Context, gradOutput: Tensor): Tensor[] {
+            const [sin, cos] = ctx.savedValues as Tensor[];
+            return [
+                new Tensor(ropeBackwardData(gradOutput.data, sin.data, cos.data, offset)),
+                new Tensor(TensorData.fill(sin.shape(), 0)),
+                new Tensor(TensorData.fill(cos.shape(), 0)),
+            ];
         }
     };
 }

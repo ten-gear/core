@@ -303,6 +303,44 @@ fn main(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index) tid:
 }`;
 }
 
+export function ropeShader(backward: boolean): string {
+    const sign = backward
+        ? 'select(-1.0, 1.0, first_half)'
+        : 'select(1.0, -1.0, first_half)';
+    return `
+@group(0) @binding(0) var<storage, read> input_data: array<f32>;
+@group(0) @binding(1) var<storage, read> sin_data: array<f32>;
+@group(0) @binding(2) var<storage, read> cos_data: array<f32>;
+@group(0) @binding(3) var<storage, read_write> output_data: array<f32>;
+@group(0) @binding(4) var<storage, read> params: array<u32>;
+${INDEX_HELPERS}
+@compute @workgroup_size(${WORKGROUP_SIZE})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+    if (gid.x >= params[0]) { return; }
+    let rank = params[1];
+    let features = params[2];
+    let half = params[3];
+    let offset = params[4];
+    var index: array<u32, ${MAX_DIMS}>;
+    to_index(gid.x, 5u, rank, &index);
+    let col = index[rank - 1u];
+    let first_half = col < half;
+    let frequency = select(col - half, col, first_half);
+    let partner = select(col - half, col + half, first_half);
+    let position = index[rank - 2u] + offset;
+    let out_pos = index_position(index, ${5 + MAX_DIMS}u, rank);
+    let input_pos = index_position(index, ${5 + MAX_DIMS * 2}u, rank);
+    let x0 = input_data[input_pos];
+    index[rank - 1u] = partner;
+    let x1 = input_data[index_position(index, ${5 + MAX_DIMS * 2}u, rank)];
+    let sin_pos = position * params[${5 + MAX_DIMS * 3}u]
+        + frequency * params[${5 + MAX_DIMS * 3 + 1}u];
+    let cos_pos = position * params[${5 + MAX_DIMS * 3 + 2}u]
+        + frequency * params[${5 + MAX_DIMS * 3 + 3}u];
+    output_data[out_pos] = x0 * cos_data[cos_pos] + ${sign} * x1 * sin_data[sin_pos];
+}`;
+}
+
 export const GATHER_SHADER = `
 @group(0) @binding(0) var<storage, read> indicies_data: array<f32>;
 @group(0) @binding(1) var<storage, read> values_data: array<f32>;
