@@ -239,6 +239,50 @@ export function tensorRoPEBackward(
     );
 }
 
+export function tensorAttention(
+    out: TensorBuffer, outShape: Shape, outStride: Stride,
+    lse: TensorBuffer, lseShape: Shape, lseStride: Stride,
+    query: TensorBuffer, queryShape: Shape, queryStride: Stride,
+    key: TensorBuffer, keyShape: Shape, keyStride: Stride,
+    value: TensorBuffer, valueShape: Shape, valueStride: Stride,
+    scale: number, causal: boolean,
+): void {
+    getBackend().attention(
+        out, outShape, outStride,
+        lse, lseShape, lseStride,
+        query, queryShape, queryStride,
+        key, keyShape, keyStride,
+        value, valueShape, valueStride,
+        scale, causal,
+    );
+}
+
+export function tensorAttentionBackward(
+    gradQuery: TensorBuffer, gradQueryShape: Shape, gradQueryStride: Stride,
+    gradKey: TensorBuffer, gradKeyShape: Shape, gradKeyStride: Stride,
+    gradValue: TensorBuffer, gradValueShape: Shape, gradValueStride: Stride,
+    gradOut: TensorBuffer, gradOutShape: Shape, gradOutStride: Stride,
+    query: TensorBuffer, queryShape: Shape, queryStride: Stride,
+    key: TensorBuffer, keyShape: Shape, keyStride: Stride,
+    value: TensorBuffer, valueShape: Shape, valueStride: Stride,
+    out: TensorBuffer, outShape: Shape, outStride: Stride,
+    lse: TensorBuffer, lseShape: Shape, lseStride: Stride,
+    scale: number, causal: boolean,
+): void {
+    getBackend().attentionBackward(
+        gradQuery, gradQueryShape, gradQueryStride,
+        gradKey, gradKeyShape, gradKeyStride,
+        gradValue, gradValueShape, gradValueStride,
+        gradOut, gradOutShape, gradOutStride,
+        query, queryShape, queryStride,
+        key, keyShape, keyStride,
+        value, valueShape, valueStride,
+        out, outShape, outStride,
+        lse, lseShape, lseStride,
+        scale, causal,
+    );
+}
+
 export function tensorGather(
     out: TensorBuffer, outShape: Shape, outStride: Stride,
     indicies: TensorBuffer, indiciesShape: Shape, indiciesStride: Stride,

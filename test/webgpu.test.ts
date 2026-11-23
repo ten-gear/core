@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, test } from 'vitest';
 import { setBackendForTesting } from '../src/backend/index.js';
 import { tryCreateWebGpuBackend, WebGpuBackend } from '../src/backend/webgpu/webgpu_backend.js';
 import { Tensor } from '../src/tensor.js';
-import { conv1d, embedding, embeddingBackward, gather, logsoftmax, rope, scatter, softmax, tocontiguous } from '../src/tensor_functions.js';
+import { conv1d, embedding, embeddingBackward, flashAttention, gather, logsoftmax, rope, scatter, softmax, tocontiguous } from '../src/tensor_functions.js';
 import { readStorageAsync, TensorData } from '../src/tensor_data.js';
 
 const backend = await tryCreateWebGpuBackend();
@@ -318,6 +318,71 @@ describe.skipIf(!backend)('WebGPU backend', () => {
         expectClose(await output.toFloat32(), [-3, 2, 1, 4, 5, -8, 7, 6]);
         output.backward(new Tensor(TensorData.fill([1, 2, 4], 1)));
         expectClose(await input.grad!.toFloat32(), [1, 1, -1, 1, 1, 1, 1, -1]);
+    });
+
+    test('runs fused causal attention forward and backward', async () => {
+        const headDim = 32;
+        const queryValues = new Float32Array(2 * headDim);
+        const keyValues = new Float32Array(2 * headDim);
+        const valueValues = new Float32Array(2 * headDim);
+        const gradValues = new Float32Array(2 * headDim);
+        queryValues[0] = 1;
+        queryValues[headDim] = 2;
+        keyValues[0] = 1;
+        keyValues[headDim] = -1;
+        valueValues[0] = 3;
+        valueValues[headDim] = 5;
+        gradValues[0] = 1;
+        gradValues[headDim] = 1;
+
+        const query = new Tensor(new TensorData(queryValues, [1, 1, 2, headDim]));
+        const key = new Tensor(new TensorData(keyValues, [1, 1, 2, headDim]));
+        const value = new Tensor(new TensorData(valueValues, [1, 1, 2, headDim]));
+        query._requiresGrad(true);
+        key._requiresGrad(true);
+        value._requiresGrad(true);
+        backend!.device.pushErrorScope('validation');
+        const output = flashAttention(query, key, value, true, 1);
+        const validationError = await backend!.device.popErrorScope();
+        expect(validationError?.message ?? null).toBeNull();
+
+        const a = Math.exp(2) / (Math.exp(2) + Math.exp(-2));
+        const b = 1 - a;
+        const expectedOutput = new Float32Array(2 * headDim);
+        expectedOutput[0] = 3;
+        expectedOutput[headDim] = 3 * a + 5 * b;
+        expectClose(await output.toFloat32(), expectedOutput);
+
+        backend!.device.pushErrorScope('validation');
+        output.backward(new Tensor(new TensorData(gradValues, [1, 1, 2, headDim])));
+        const backwardValidationError = await backend!.device.popErrorScope();
+        expect(backwardValidationError?.message ?? null).toBeNull();
+        const expectedGradQuery = new Float32Array(2 * headDim);
+        const expectedGradKey = new Float32Array(2 * headDim);
+        const expectedGradValue = new Float32Array(2 * headDim);
+        expectedGradQuery[headDim] = -4 * a * b;
+        expectedGradKey[0] = -4 * a * b;
+        expectedGradKey[headDim] = 4 * a * b;
+        expectedGradValue[0] = 1 + a;
+        expectedGradValue[headDim] = b;
+        expectClose(await query.grad!.toFloat32(), expectedGradQuery);
+        expectClose(await key.grad!.toFloat32(), expectedGradKey);
+        expectClose(await value.grad!.toFloat32(), expectedGradValue);
+    });
+
+    test('streams multiple attention tiles without materializing scores', async () => {
+        const time = 9, headDim = 64;
+        const values = new Float32Array(time * headDim);
+        for (let row = 0; row < time; row++)
+            values.fill(row, row * headDim, (row + 1) * headDim);
+        const zeros = new Float32Array(time * headDim);
+        const query = new Tensor(new TensorData(zeros, [1, 1, time, headDim]));
+        const key = new Tensor(new TensorData(Float32Array.from(zeros), [1, 1, time, headDim]));
+        const value = new Tensor(new TensorData(values, [1, 1, time, headDim]));
+        const output = await flashAttention(query, key, value, true).toFloat32();
+        for (let row = 0; row < time; row++)
+            for (let feature = 0; feature < headDim; feature++)
+                expect(output[row * headDim + feature]).toBeCloseTo(row / 2);
     });
 
     test('reuses pooled buffers without violating queue order', async () => {

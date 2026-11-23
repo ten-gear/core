@@ -2,7 +2,7 @@ import { randomFloat } from "./helperfunctions.js";
 import { Parameter } from "./module.js";
 import { Layer } from "./model.js";
 import { Tensor } from "./tensor.js";
-import { logsoftmax, maxpool2d, rope } from "./tensor_functions.js";
+import { flashAttention, logsoftmax, maxpool2d, rope } from "./tensor_functions.js";
 import { Shape, TensorData, writeStorage } from "./tensor_data.js";
 
 function heParameter(fanIn: number, shape: Shape): Tensor {
@@ -69,6 +69,21 @@ export class RoPE extends Layer {
 
     forward(input: Tensor, offset: number = 0): Tensor {
         return rope(input, this.sin, this.cos, offset);
+    }
+}
+
+export class FlashAttention extends Layer {
+    readonly causal: boolean;
+    readonly scale: number | undefined;
+
+    constructor(causal: boolean = false, scale?: number) {
+        super();
+        this.causal = causal;
+        this.scale = scale;
+    }
+
+    forward(query: Tensor, key: Tensor = query, value: Tensor = key): Tensor {
+        return flashAttention(query, key, value, this.causal, this.scale);
     }
 }
 

@@ -109,6 +109,17 @@ void logsoftmax_backward(const View& grad_in, const View& grad_out, const View& 
 void rope(const View& out, const View& in, const View& sin, const View& cos, int32_t offset);
 void rope_backward(const View& grad_in, const View& grad_out, const View& sin, const View& cos, int32_t offset);
 
+// Fused scaled dot-product attention for [batch, heads, time, headDim].
+// lse is [batch, heads, time]. No time-by-time probability matrix is stored.
+void attention(
+    const View& out, const View& lse,
+    const View& query, const View& key, const View& value,
+    float scale, bool causal);
+void attention_backward(
+    const View& grad_query, const View& grad_key, const View& grad_value,
+    const View& grad_out, const View& query, const View& key, const View& value,
+    const View& out, const View& lse, float scale, bool causal);
+
 // Same signatures as above. Defined in src/cuda/*.cu when TSGRAD_HAS_CUDA is set.
 // On a CUDA build View::data is already a device pointer. The .cu function
 // launches on the process-wide stream and returns without waiting. It does not
@@ -193,6 +204,15 @@ void logsoftmax_backward(
 
 void rope(const View& out, const View& in, const View& sin, const View& cos, int32_t offset);
 void rope_backward(const View& grad_in, const View& grad_out, const View& sin, const View& cos, int32_t offset);
+
+void attention(
+    const View& out, const View& lse,
+    const View& query, const View& key, const View& value,
+    float scale, bool causal);
+void attention_backward(
+    const View& grad_query, const View& grad_key, const View& grad_value,
+    const View& grad_out, const View& query, const View& key, const View& value,
+    const View& out, const View& lse, float scale, bool causal);
 
 // Non-zero storage fill. Queued on the process-wide stream. Does not wait.
 void fill(float* data, size_t numel, float value);

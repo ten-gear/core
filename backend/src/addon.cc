@@ -773,6 +773,100 @@ void export_rope(Napi::Env env, Napi::Object& exports, const char* name, RopeFn 
     }));
 }
 
+Napi::Value bind_attention(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() != 17) {
+        throw Napi::TypeError::New(env,
+            "attention expects (out, outShape, outStride, lse, lseShape, lseStride, query, queryShape, queryStride, key, keyShape, keyStride, value, valueShape, valueStride, scale, causal)");
+    }
+    std::vector<int32_t> out_shape = read_i32_array(env, info[1], "outShape");
+    std::vector<int32_t> out_stride = read_i32_array(env, info[2], "outStride");
+    std::vector<int32_t> lse_shape = read_i32_array(env, info[4], "lseShape");
+    std::vector<int32_t> lse_stride = read_i32_array(env, info[5], "lseStride");
+    std::vector<int32_t> query_shape = read_i32_array(env, info[7], "queryShape");
+    std::vector<int32_t> query_stride = read_i32_array(env, info[8], "queryStride");
+    std::vector<int32_t> key_shape = read_i32_array(env, info[10], "keyShape");
+    std::vector<int32_t> key_stride = read_i32_array(env, info[11], "keyStride");
+    std::vector<int32_t> value_shape = read_i32_array(env, info[13], "valueShape");
+    std::vector<int32_t> value_stride = read_i32_array(env, info[14], "valueStride");
+    check_rank(env, out_shape, out_stride, "out");
+    check_rank(env, lse_shape, lse_stride, "lse");
+    check_rank(env, query_shape, query_stride, "query");
+    check_rank(env, key_shape, key_stride, "key");
+    check_rank(env, value_shape, value_stride, "value");
+    if (!info[15].IsNumber() || !info[16].IsBoolean())
+        throw Napi::TypeError::New(env, "attention scale must be a number and causal must be a boolean");
+
+    tsgrad::View out = make_view(env, info[0], out_shape, out_stride, "out");
+    tsgrad::View lse = make_view(env, info[3], lse_shape, lse_stride, "lse");
+    tsgrad::View query = make_view(env, info[6], query_shape, query_stride, "query");
+    tsgrad::View key = make_view(env, info[9], key_shape, key_stride, "key");
+    tsgrad::View value = make_view(env, info[12], value_shape, value_stride, "value");
+    const float scale = info[15].As<Napi::Number>().FloatValue();
+    const bool causal = info[16].As<Napi::Boolean>().Value();
+    call_native(env, [&](){ tsgrad::attention(out, lse, query, key, value, scale, causal); });
+    return env.Undefined();
+}
+
+Napi::Value bind_attention_backward(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() != 29) {
+        throw Napi::TypeError::New(env,
+            "attentionBackward expects (gradQuery, gradQueryShape, gradQueryStride, gradKey, gradKeyShape, gradKeyStride, gradValue, gradValueShape, gradValueStride, gradOut, gradOutShape, gradOutStride, query, queryShape, queryStride, key, keyShape, keyStride, value, valueShape, valueStride, out, outShape, outStride, lse, lseShape, lseStride, scale, causal)");
+    }
+    std::vector<int32_t> grad_query_shape = read_i32_array(env, info[1], "gradQueryShape");
+    std::vector<int32_t> grad_query_stride = read_i32_array(env, info[2], "gradQueryStride");
+    std::vector<int32_t> grad_key_shape = read_i32_array(env, info[4], "gradKeyShape");
+    std::vector<int32_t> grad_key_stride = read_i32_array(env, info[5], "gradKeyStride");
+    std::vector<int32_t> grad_value_shape = read_i32_array(env, info[7], "gradValueShape");
+    std::vector<int32_t> grad_value_stride = read_i32_array(env, info[8], "gradValueStride");
+    std::vector<int32_t> grad_out_shape = read_i32_array(env, info[10], "gradOutShape");
+    std::vector<int32_t> grad_out_stride = read_i32_array(env, info[11], "gradOutStride");
+    std::vector<int32_t> query_shape = read_i32_array(env, info[13], "queryShape");
+    std::vector<int32_t> query_stride = read_i32_array(env, info[14], "queryStride");
+    std::vector<int32_t> key_shape = read_i32_array(env, info[16], "keyShape");
+    std::vector<int32_t> key_stride = read_i32_array(env, info[17], "keyStride");
+    std::vector<int32_t> value_shape = read_i32_array(env, info[19], "valueShape");
+    std::vector<int32_t> value_stride = read_i32_array(env, info[20], "valueStride");
+    std::vector<int32_t> out_shape = read_i32_array(env, info[22], "outShape");
+    std::vector<int32_t> out_stride = read_i32_array(env, info[23], "outStride");
+    std::vector<int32_t> lse_shape = read_i32_array(env, info[25], "lseShape");
+    std::vector<int32_t> lse_stride = read_i32_array(env, info[26], "lseStride");
+    check_rank(env, grad_query_shape, grad_query_stride, "gradQuery");
+    check_rank(env, grad_key_shape, grad_key_stride, "gradKey");
+    check_rank(env, grad_value_shape, grad_value_stride, "gradValue");
+    check_rank(env, grad_out_shape, grad_out_stride, "gradOut");
+    check_rank(env, query_shape, query_stride, "query");
+    check_rank(env, key_shape, key_stride, "key");
+    check_rank(env, value_shape, value_stride, "value");
+    check_rank(env, out_shape, out_stride, "out");
+    check_rank(env, lse_shape, lse_stride, "lse");
+    if (!info[27].IsNumber() || !info[28].IsBoolean())
+        throw Napi::TypeError::New(env, "attentionBackward scale must be a number and causal must be a boolean");
+
+    tsgrad::View grad_query = make_view(
+        env, info[0], grad_query_shape, grad_query_stride, "gradQuery");
+    tsgrad::View grad_key = make_view(
+        env, info[3], grad_key_shape, grad_key_stride, "gradKey");
+    tsgrad::View grad_value = make_view(
+        env, info[6], grad_value_shape, grad_value_stride, "gradValue");
+    tsgrad::View grad_out = make_view(
+        env, info[9], grad_out_shape, grad_out_stride, "gradOut");
+    tsgrad::View query = make_view(env, info[12], query_shape, query_stride, "query");
+    tsgrad::View key = make_view(env, info[15], key_shape, key_stride, "key");
+    tsgrad::View value = make_view(env, info[18], value_shape, value_stride, "value");
+    tsgrad::View out = make_view(env, info[21], out_shape, out_stride, "out");
+    tsgrad::View lse = make_view(env, info[24], lse_shape, lse_stride, "lse");
+    const float scale = info[27].As<Napi::Number>().FloatValue();
+    const bool causal = info[28].As<Napi::Boolean>().Value();
+    call_native(env, [&](){
+        tsgrad::attention_backward(
+            grad_query, grad_key, grad_value, grad_out,
+            query, key, value, out, lse, scale, causal);
+    });
+    return env.Undefined();
+}
+
 void export_conv(Napi::Env env, Napi::Object& exports, const char* name, ConvFn fn) {
     exports.Set(name, Napi::Function::New(env, [fn](const Napi::CallbackInfo& info) {
         return bind_conv(info, fn);
@@ -811,6 +905,8 @@ Napi::Object init(Napi::Env env, Napi::Object exports) {
     export_softmax_backward(env, exports, "logSoftmaxBackward", tsgrad::logsoftmax_backward);
     export_rope(env, exports, "rope", tsgrad::rope);
     export_rope(env, exports, "ropeBackward", tsgrad::rope_backward);
+    exports.Set("attention", Napi::Function::New(env, bind_attention));
+    exports.Set("attentionBackward", Napi::Function::New(env, bind_attention_backward));
 
     export_zip(env, exports, "matmul", tsgrad::matmul);
     export_conv(env, exports, "conv1d", tsgrad::conv1d);

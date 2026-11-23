@@ -65,6 +65,10 @@ function rowOffset(row: number, shape: Shape, stride: Stride): number {
     return position;
 }
 
+function position4(stride: Stride, batch: number, head: number, time: number, feature: number): number {
+    return batch * stride[0]! + head * stride[1]! + time * stride[2]! + feature * stride[3]!;
+}
+
 function sliceOffset(row: number, shape: Shape, stride: Stride, dim: number): number {
     let position = 0;
     for (let axis = shape.length - 1; axis >= 0; axis--) {
@@ -677,5 +681,173 @@ export class CpuBackend implements DeviceBackend {
             gradInput, gradInputShape, gradInputStride,
             gradOutput, gradOutputShape, gradOutputStride,
             sin, sinShape, sinStride, cos, cosShape, cosStride, offset);
+    }
+
+    private attentionDimensions(
+        outShape: Shape, lseShape: Shape,
+        queryShape: Shape, keyShape: Shape, valueShape: Shape,
+        scale: number, operation: string,
+    ): [number, number, number, number] {
+        if (queryShape.length !== 4)
+            throw new Error(`${operation} expects rank-4 [batch, heads, time, headDim] inputs`);
+        if (!sameShape(outShape, queryShape)
+            || !sameShape(keyShape, queryShape) || !sameShape(valueShape, queryShape))
+            throw new Error(`${operation} input/output shape mismatch`);
+        const [batches, heads, time, headDim] = queryShape as [number, number, number, number];
+        if (batches <= 0 || heads <= 0 || time <= 0)
+            throw new Error(`${operation} requires non-empty batch, head, and time dimensions`);
+        if (headDim !== 32 && headDim !== 64 && headDim !== 128)
+            throw new Error(`${operation} supports head dimensions 32, 64, and 128`);
+        if (lseShape.length !== 3
+            || lseShape[0] !== batches || lseShape[1] !== heads || lseShape[2] !== time)
+            throw new Error(`${operation} expects lse shape [batch, heads, time]`);
+        if (!Number.isFinite(scale)) throw new Error(`${operation} expects a finite scale`);
+        return [batches, heads, time, headDim];
+    }
+
+    attention(
+        outStorage: BackendStorage, outShape: Shape, outStride: Stride,
+        lseStorage: BackendStorage, lseShape: Shape, lseStride: Stride,
+        queryStorage: BackendStorage, queryShape: Shape, queryStride: Stride,
+        keyStorage: BackendStorage, keyShape: Shape, keyStride: Stride,
+        valueStorage: BackendStorage, valueShape: Shape, valueStride: Stride,
+        scale: number, causal: boolean): void {
+        const [batches, heads, time, headDim] = this.attentionDimensions(
+            outShape, lseShape, queryShape, keyShape, valueShape, scale, 'attention');
+        const output = host(outStorage), lse = host(lseStorage);
+        const query = host(queryStorage), key = host(keyStorage), value = host(valueStorage);
+
+        for (let batch = 0; batch < batches; batch++) {
+            for (let head = 0; head < heads; head++) {
+                for (let queryTime = 0; queryTime < time; queryTime++) {
+                    const accumulator = new Float32Array(headDim);
+                    let maximum = -Infinity;
+                    let denominator = 0;
+                    const keyLimit = causal ? queryTime + 1 : time;
+                    for (let keyTime = 0; keyTime < keyLimit; keyTime++) {
+                        let dot = 0;
+                        for (let feature = 0; feature < headDim; feature++)
+                            dot += query[position4(queryStride, batch, head, queryTime, feature)]!
+                                * key[position4(keyStride, batch, head, keyTime, feature)]!;
+                        const score = scale * dot;
+                        const nextMaximum = Math.max(maximum, score);
+                        const previousScale = Math.exp(maximum - nextMaximum);
+                        const probabilityScale = Math.exp(score - nextMaximum);
+                        denominator = denominator * previousScale + probabilityScale;
+                        for (let feature = 0; feature < headDim; feature++)
+                            accumulator[feature] = accumulator[feature]! * previousScale
+                                + probabilityScale * value[
+                                    position4(valueStride, batch, head, keyTime, feature)]!;
+                        maximum = nextMaximum;
+                    }
+                    for (let feature = 0; feature < headDim; feature++)
+                        output[position4(outStride, batch, head, queryTime, feature)] =
+                            accumulator[feature]! / denominator;
+                    lse[batch * lseStride[0]! + head * lseStride[1]! + queryTime * lseStride[2]!] =
+                        maximum + Math.log(denominator);
+                }
+            }
+        }
+    }
+
+    attentionBackward(
+        gradQueryStorage: BackendStorage, gradQueryShape: Shape, gradQueryStride: Stride,
+        gradKeyStorage: BackendStorage, gradKeyShape: Shape, gradKeyStride: Stride,
+        gradValueStorage: BackendStorage, gradValueShape: Shape, gradValueStride: Stride,
+        gradOutStorage: BackendStorage, gradOutShape: Shape, gradOutStride: Stride,
+        queryStorage: BackendStorage, queryShape: Shape, queryStride: Stride,
+        keyStorage: BackendStorage, keyShape: Shape, keyStride: Stride,
+        valueStorage: BackendStorage, valueShape: Shape, valueStride: Stride,
+        outStorage: BackendStorage, outShape: Shape, outStride: Stride,
+        lseStorage: BackendStorage, lseShape: Shape, lseStride: Stride,
+        scale: number, causal: boolean): void {
+        const [batches, heads, time, headDim] = this.attentionDimensions(
+            outShape, lseShape, queryShape, keyShape, valueShape, scale, 'attentionBackward');
+        if (!sameShape(gradQueryShape, queryShape)
+            || !sameShape(gradKeyShape, queryShape)
+            || !sameShape(gradValueShape, queryShape)
+            || !sameShape(gradOutShape, queryShape))
+            throw new Error('attentionBackward gradient shape mismatch');
+
+        const gradQuery = host(gradQueryStorage), gradKey = host(gradKeyStorage);
+        const gradValue = host(gradValueStorage), gradOut = host(gradOutStorage);
+        const query = host(queryStorage), key = host(keyStorage), value = host(valueStorage);
+        const output = host(outStorage), lse = host(lseStorage);
+
+        for (let batch = 0; batch < batches; batch++) {
+            for (let head = 0; head < heads; head++) {
+                for (let queryTime = 0; queryTime < time; queryTime++) {
+                    let delta = 0;
+                    for (let feature = 0; feature < headDim; feature++)
+                        delta += output[position4(outStride, batch, head, queryTime, feature)]!
+                            * gradOut[position4(gradOutStride, batch, head, queryTime, feature)]!;
+                    const rowLse = lse[
+                        batch * lseStride[0]! + head * lseStride[1]! + queryTime * lseStride[2]!]!;
+                    const accumulator = new Float32Array(headDim);
+                    const keyLimit = causal ? queryTime + 1 : time;
+                    for (let keyTime = 0; keyTime < keyLimit; keyTime++) {
+                        let queryKeyDot = 0;
+                        let gradValueDot = 0;
+                        for (let feature = 0; feature < headDim; feature++) {
+                            queryKeyDot += query[
+                                position4(queryStride, batch, head, queryTime, feature)]!
+                                * key[position4(keyStride, batch, head, keyTime, feature)]!;
+                            gradValueDot += gradOut[
+                                position4(gradOutStride, batch, head, queryTime, feature)]!
+                                * value[position4(valueStride, batch, head, keyTime, feature)]!;
+                        }
+                        const probability = Math.exp(scale * queryKeyDot - rowLse);
+                        const gradScore = probability * (gradValueDot - delta);
+                        for (let feature = 0; feature < headDim; feature++)
+                            accumulator[feature]! += scale * gradScore
+                                * key[position4(keyStride, batch, head, keyTime, feature)]!;
+                    }
+                    for (let feature = 0; feature < headDim; feature++)
+                        gradQuery[position4(gradQueryStride, batch, head, queryTime, feature)] =
+                            accumulator[feature]!;
+                }
+
+                for (let keyTime = 0; keyTime < time; keyTime++) {
+                    const keyAccumulator = new Float32Array(headDim);
+                    const valueAccumulator = new Float32Array(headDim);
+                    const queryStart = causal ? keyTime : 0;
+                    for (let queryTime = queryStart; queryTime < time; queryTime++) {
+                        let delta = 0;
+                        let queryKeyDot = 0;
+                        let gradValueDot = 0;
+                        for (let feature = 0; feature < headDim; feature++) {
+                            delta += output[position4(outStride, batch, head, queryTime, feature)]!
+                                * gradOut[
+                                    position4(gradOutStride, batch, head, queryTime, feature)]!;
+                            queryKeyDot += query[
+                                position4(queryStride, batch, head, queryTime, feature)]!
+                                * key[position4(keyStride, batch, head, keyTime, feature)]!;
+                            gradValueDot += gradOut[
+                                position4(gradOutStride, batch, head, queryTime, feature)]!
+                                * value[position4(valueStride, batch, head, keyTime, feature)]!;
+                        }
+                        const rowLse = lse[
+                            batch * lseStride[0]! + head * lseStride[1]!
+                            + queryTime * lseStride[2]!]!;
+                        const probability = Math.exp(scale * queryKeyDot - rowLse);
+                        const gradScore = probability * (gradValueDot - delta);
+                        for (let feature = 0; feature < headDim; feature++) {
+                            keyAccumulator[feature]! += scale * gradScore
+                                * query[position4(
+                                    queryStride, batch, head, queryTime, feature)]!;
+                            valueAccumulator[feature]! += probability
+                                * gradOut[position4(
+                                    gradOutStride, batch, head, queryTime, feature)]!;
+                        }
+                    }
+                    for (let feature = 0; feature < headDim; feature++) {
+                        gradKey[position4(gradKeyStride, batch, head, keyTime, feature)] =
+                            keyAccumulator[feature]!;
+                        gradValue[position4(gradValueStride, batch, head, keyTime, feature)] =
+                            valueAccumulator[feature]!;
+                    }
+                }
+            }
+        }
     }
 }

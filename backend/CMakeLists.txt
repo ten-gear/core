@@ -65,6 +65,7 @@ add_library(tsgrad_native SHARED
     src/cpu/layernorm.cpp
     src/cpu/softmax.cpp
     src/cpu/rope.cpp
+    src/cpu/attention.cpp
 )
 
 # native.ts loads this exact file. Per-config output dirs are set so Visual Studio
@@ -132,6 +133,7 @@ if(TSGRAD_CUDA)
             src/cuda/layernorm.cu
             src/cuda/softmax.cu
             src/cuda/rope.cu
+            src/cuda/attention.cu
         )
         set_target_properties(tsgrad_native PROPERTIES CUDA_ARCHITECTURES native)
         target_link_libraries(tsgrad_native PRIVATE CUDA::cudart CUDA::cublas)

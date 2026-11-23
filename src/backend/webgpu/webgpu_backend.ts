@@ -2,7 +2,8 @@ import type {
     BackendStorage, BinaryOp, DeviceBackend, ReduceOp, Shape, Stride, UnaryOp,
 } from '../device_backend.js';
 import {
-    ADAMW_SHADER, alignedMapShader, alignedZipShader, CONV1D_SHADER, CONV2D_SHADER, FILL_SHADER,
+    ADAMW_SHADER, alignedMapShader, alignedZipShader, ATTENTION_TILE, attentionBackwardKeyValueShader,
+    attentionBackwardQueryShader, attentionShader, CONV1D_SHADER, CONV2D_SHADER, FILL_SHADER,
     EMBEDDING_BACKWARD_CONTIGUOUS_SHADER, EMBEDDING_BACKWARD_SHADER, EMBEDDING_CONTIGUOUS_SHADER, EMBEDDING_SHADER, GATHER_SHADER, MATMUL_SHADER, MAX_DIMS, reduceShader, SCATTER_SHADER, SGD_MOMENTUM_SHADER, SGD_SHADER,
     LAYERNORM_BACKWARD_INPUT_SHADER, LAYERNORM_BACKWARD_PARAMS_SHADER, LAYERNORM_SHADER,
     ropeShader, softmaxBackwardShader, softmaxShader, stridedMapShader, stridedZipShader, WORKGROUP_SIZE,
@@ -858,6 +859,116 @@ export class WebGpuBackend implements DeviceBackend {
             gradInput, gradInputShape, gradInputStride,
             gradOutput, gradOutputShape, gradOutputStride,
             sin, sinShape, sinStride, cos, cosShape, cosStride, offset);
+    }
+
+    private attentionDimensions(
+        outShape: Shape, lseShape: Shape,
+        queryShape: Shape, keyShape: Shape, valueShape: Shape,
+        scale: number, operation: string,
+    ): [number, number, number, number] {
+        if (queryShape.length !== 4)
+            throw new Error(`${operation} expects rank-4 [batch, heads, time, headDim] inputs`);
+        if (!same(outShape, queryShape)
+            || !same(keyShape, queryShape) || !same(valueShape, queryShape))
+            throw new Error(`${operation} input/output shape mismatch`);
+        const batches = queryShape[0]!, heads = queryShape[1]!;
+        const time = queryShape[2]!, headDim = queryShape[3]!;
+        if (batches <= 0 || heads <= 0 || time <= 0)
+            throw new Error(`${operation} requires non-empty batch, head, and time dimensions`);
+        if (headDim !== 32 && headDim !== 64 && headDim !== 128)
+            throw new Error(`${operation} supports head dimensions 32, 64, and 128`);
+        if (lseShape.length !== 3
+            || lseShape[0] !== batches || lseShape[1] !== heads || lseShape[2] !== time)
+            throw new Error(`${operation} expects lse shape [batch, heads, time]`);
+        if (!Number.isFinite(scale)) throw new Error(`${operation} expects a finite scale`);
+        return [batches, heads, time, headDim];
+    }
+
+    attention(
+        outStorage: BackendStorage, outShape: Shape, outStride: Stride,
+        lseStorage: BackendStorage, lseShape: Shape, lseStride: Stride,
+        queryStorage: BackendStorage, queryShape: Shape, queryStride: Stride,
+        keyStorage: BackendStorage, keyShape: Shape, keyStride: Stride,
+        valueStorage: BackendStorage, valueShape: Shape, valueStride: Stride,
+        scale: number, causal: boolean): void {
+        const [batches, heads, time, headDim] = this.attentionDimensions(
+            outShape, lseShape, queryShape, keyShape, valueShape, scale, 'attention');
+        const out = gpuStorage(outStorage), lse = gpuStorage(lseStorage);
+        const query = gpuStorage(queryStorage), key = gpuStorage(keyStorage);
+        const value = gpuStorage(valueStorage);
+        const params = this.params([
+            batches, heads, time, headDim, floatBits(scale), Number(causal),
+            ...outStride, ...lseStride, ...queryStride, ...keyStride, ...valueStride,
+        ]);
+        const workgroups = batches * heads * Math.ceil(time / ATTENTION_TILE);
+        this.submit(`attention:${headDim}`, attentionShader(headDim), [
+            { binding: 0, resource: { buffer: query.buffer } },
+            { binding: 1, resource: { buffer: key.buffer } },
+            { binding: 2, resource: { buffer: value.buffer } },
+            { binding: 3, resource: { buffer: out.buffer } },
+            { binding: 4, resource: { buffer: lse.buffer } },
+            { binding: 5, resource: { buffer: params } },
+        ], [workgroups], [params]);
+    }
+
+    attentionBackward(
+        gradQueryStorage: BackendStorage, gradQueryShape: Shape, gradQueryStride: Stride,
+        gradKeyStorage: BackendStorage, gradKeyShape: Shape, gradKeyStride: Stride,
+        gradValueStorage: BackendStorage, gradValueShape: Shape, gradValueStride: Stride,
+        gradOutStorage: BackendStorage, gradOutShape: Shape, gradOutStride: Stride,
+        queryStorage: BackendStorage, queryShape: Shape, queryStride: Stride,
+        keyStorage: BackendStorage, keyShape: Shape, keyStride: Stride,
+        valueStorage: BackendStorage, valueShape: Shape, valueStride: Stride,
+        outStorage: BackendStorage, outShape: Shape, outStride: Stride,
+        lseStorage: BackendStorage, lseShape: Shape, lseStride: Stride,
+        scale: number, causal: boolean): void {
+        const [batches, heads, time, headDim] = this.attentionDimensions(
+            outShape, lseShape, queryShape, keyShape, valueShape, scale, 'attentionBackward');
+        if (!same(gradQueryShape, queryShape)
+            || !same(gradKeyShape, queryShape)
+            || !same(gradValueShape, queryShape)
+            || !same(gradOutShape, queryShape))
+            throw new Error('attentionBackward gradient shape mismatch');
+
+        const gradQuery = gpuStorage(gradQueryStorage), gradKey = gpuStorage(gradKeyStorage);
+        const gradValue = gpuStorage(gradValueStorage), gradOut = gpuStorage(gradOutStorage);
+        const query = gpuStorage(queryStorage), key = gpuStorage(keyStorage);
+        const value = gpuStorage(valueStorage), out = gpuStorage(outStorage);
+        const lse = gpuStorage(lseStorage);
+        const workgroups = batches * heads * Math.ceil(time / ATTENTION_TILE);
+        const queryParams = this.params([
+            batches, heads, time, headDim, floatBits(scale), Number(causal),
+            ...gradQueryStride, ...gradOutStride, ...queryStride, ...keyStride,
+            ...valueStride, ...outStride, ...lseStride,
+        ]);
+        this.submit(`attentionBackward:query:${headDim}`, attentionBackwardQueryShader(headDim), [
+            { binding: 0, resource: { buffer: gradQuery.buffer } },
+            { binding: 1, resource: { buffer: gradOut.buffer } },
+            { binding: 2, resource: { buffer: query.buffer } },
+            { binding: 3, resource: { buffer: key.buffer } },
+            { binding: 4, resource: { buffer: value.buffer } },
+            { binding: 5, resource: { buffer: out.buffer } },
+            { binding: 6, resource: { buffer: lse.buffer } },
+            { binding: 7, resource: { buffer: queryParams } },
+        ], [workgroups], [queryParams]);
+
+        const keyValueParams = this.params([
+            batches, heads, time, headDim,
+            floatBits(scale), Number(causal), 0, 0,
+            ...gradKeyStride, ...gradValueStride, ...gradOutStride, ...queryStride,
+            ...keyStride, ...valueStride, ...outStride, ...lseStride, 0,
+        ], true);
+        this.submit(`attentionBackward:keyValue:${headDim}`, attentionBackwardKeyValueShader(headDim), [
+            { binding: 0, resource: { buffer: gradKey.buffer } },
+            { binding: 1, resource: { buffer: gradValue.buffer } },
+            { binding: 2, resource: { buffer: gradOut.buffer } },
+            { binding: 3, resource: { buffer: query.buffer } },
+            { binding: 4, resource: { buffer: key.buffer } },
+            { binding: 5, resource: { buffer: value.buffer } },
+            { binding: 6, resource: { buffer: out.buffer } },
+            { binding: 7, resource: { buffer: lse.buffer } },
+            { binding: 8, resource: { buffer: keyValueParams } },
+        ], [workgroups], [keyValueParams]);
     }
 }
 

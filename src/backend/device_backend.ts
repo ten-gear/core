@@ -152,4 +152,24 @@ export interface DeviceBackend {
         cos: BackendStorage, cosShape: Shape, cosStride: Stride,
         offset: number,
     ): void;
+    attention(
+        out: BackendStorage, outShape: Shape, outStride: Stride,
+        lse: BackendStorage, lseShape: Shape, lseStride: Stride,
+        query: BackendStorage, queryShape: Shape, queryStride: Stride,
+        key: BackendStorage, keyShape: Shape, keyStride: Stride,
+        value: BackendStorage, valueShape: Shape, valueStride: Stride,
+        scale: number, causal: boolean,
+    ): void;
+    attentionBackward(
+        gradQuery: BackendStorage, gradQueryShape: Shape, gradQueryStride: Stride,
+        gradKey: BackendStorage, gradKeyShape: Shape, gradKeyStride: Stride,
+        gradValue: BackendStorage, gradValueShape: Shape, gradValueStride: Stride,
+        gradOut: BackendStorage, gradOutShape: Shape, gradOutStride: Stride,
+        query: BackendStorage, queryShape: Shape, queryStride: Stride,
+        key: BackendStorage, keyShape: Shape, keyStride: Stride,
+        value: BackendStorage, valueShape: Shape, valueStride: Stride,
+        out: BackendStorage, outShape: Shape, outStride: Stride,
+        lse: BackendStorage, lseShape: Shape, lseStride: Stride,
+        scale: number, causal: boolean,
+    ): void;
 }

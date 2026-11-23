@@ -257,4 +257,46 @@ export class NativeBackend implements DeviceBackend {
             offset,
         );
     }
+
+    attention(
+        out: BackendStorage, outShape: Shape, outStride: Stride,
+        lse: BackendStorage, lseShape: Shape, lseStride: Stride,
+        query: BackendStorage, queryShape: Shape, queryStride: Stride,
+        key: BackendStorage, keyShape: Shape, keyStride: Stride,
+        value: BackendStorage, valueShape: Shape, valueStride: Stride,
+        scale: number, causal: boolean): void {
+        this.addon.attention(
+            nativeStorage(out), outShape, outStride,
+            nativeStorage(lse), lseShape, lseStride,
+            nativeStorage(query), queryShape, queryStride,
+            nativeStorage(key), keyShape, keyStride,
+            nativeStorage(value), valueShape, valueStride,
+            scale, causal,
+        );
+    }
+
+    attentionBackward(
+        gradQuery: BackendStorage, gradQueryShape: Shape, gradQueryStride: Stride,
+        gradKey: BackendStorage, gradKeyShape: Shape, gradKeyStride: Stride,
+        gradValue: BackendStorage, gradValueShape: Shape, gradValueStride: Stride,
+        gradOut: BackendStorage, gradOutShape: Shape, gradOutStride: Stride,
+        query: BackendStorage, queryShape: Shape, queryStride: Stride,
+        key: BackendStorage, keyShape: Shape, keyStride: Stride,
+        value: BackendStorage, valueShape: Shape, valueStride: Stride,
+        out: BackendStorage, outShape: Shape, outStride: Stride,
+        lse: BackendStorage, lseShape: Shape, lseStride: Stride,
+        scale: number, causal: boolean): void {
+        this.addon.attentionBackward(
+            nativeStorage(gradQuery), gradQueryShape, gradQueryStride,
+            nativeStorage(gradKey), gradKeyShape, gradKeyStride,
+            nativeStorage(gradValue), gradValueShape, gradValueStride,
+            nativeStorage(gradOut), gradOutShape, gradOutStride,
+            nativeStorage(query), queryShape, queryStride,
+            nativeStorage(key), keyShape, keyStride,
+            nativeStorage(value), valueShape, valueStride,
+            nativeStorage(out), outShape, outStride,
+            nativeStorage(lse), lseShape, lseStride,
+            scale, causal,
+        );
+    }
 }

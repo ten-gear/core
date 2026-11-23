@@ -5,7 +5,7 @@ import * as operators from "./operators.js";
 // swap out if wanted, tensor_ops has non-multithreaded, the fastTensor stuff is multithreaded
 //import { tensorMap, tensorZip, tensorReduce } from "./tensor_ops.js";
 //import {/*fastTensorMap as tensorMap, fastTensorZip as tensorZip, fastTensorReduce as tensorReduce, fastMatMul as matMul,*/ fastConv1d as tensorConv1d, fastConv2d as tensorConv2d} from "./fast_ops.js";
-import {tensorMap, tensorZip, tensorReduce, matMul, tensorConv1d, tensorConv2d, tensorGather, tensorScatter, tensorEmbedding, tensorEmbeddingBackward, tensorLayerNorm, tensorLayerNormBackward, tensorSoftmax, tensorSoftmaxBackward, tensorLogSoftmax, tensorLogSoftmaxBackward, tensorRoPE, tensorRoPEBackward } from "./native_ops.js"
+import {tensorMap, tensorZip, tensorReduce, matMul, tensorConv1d, tensorConv2d, tensorGather, tensorScatter, tensorEmbedding, tensorEmbeddingBackward, tensorLayerNorm, tensorLayerNormBackward, tensorSoftmax, tensorSoftmaxBackward, tensorLogSoftmax, tensorLogSoftmaxBackward, tensorRoPE, tensorRoPEBackward, tensorAttention, tensorAttentionBackward } from "./native_ops.js"
 import { randomFloat } from "./helperfunctions.js";
 
 export function neg(a: TensorData): TensorData{
@@ -422,6 +422,72 @@ export function ropeBackwardData(
     return gradInput;
 }
 
+export type FlashAttentionForwardResult = {
+    output: TensorData;
+    lse: TensorData;
+};
+
+function validateFlashAttention(
+    query: TensorData, key: TensorData, value: TensorData, scale: number,
+): void {
+    if (query.dims !== 4)
+        throw new Error('flashAttention expects rank-4 [batch, heads, time, headDim] inputs');
+    const sameShape = (other: TensorData): boolean =>
+        other.dims === query.dims
+        && other._shape.every((size, index) => size === query._shape[index]);
+    if (!sameShape(key) || !sameShape(value))
+        throw new Error('flashAttention expects query, key, and value to have the same shape');
+    const [batches, heads, time, headDim] = query._shape;
+    if (batches! <= 0 || heads! <= 0 || time! <= 0)
+        throw new Error('flashAttention requires non-empty batch, head, and time dimensions');
+    if (headDim !== 32 && headDim !== 64 && headDim !== 128)
+        throw new Error('flashAttention supports head dimensions 32, 64, and 128');
+    if (!Number.isFinite(scale)) throw new Error('flashAttention expects a finite scale');
+}
+
+export function flashAttentionData(
+    query: TensorData, key: TensorData, value: TensorData,
+    scale: number, causal: boolean,
+): FlashAttentionForwardResult {
+    validateFlashAttention(query, key, value, scale);
+    const output = TensorData.empty(query.shape);
+    const lse = TensorData.empty([query._shape[0]!, query._shape[1]!, query._shape[2]!]);
+    tensorAttention(
+        output._storage, output._shape, output._stride,
+        lse._storage, lse._shape, lse._stride,
+        query._storage, query._shape, query._stride,
+        key._storage, key._shape, key._stride,
+        value._storage, value._shape, value._stride,
+        scale, causal,
+    );
+    return { output, lse };
+}
+
+export function flashAttentionBackward(
+    gradOutput: TensorData,
+    query: TensorData, key: TensorData, value: TensorData,
+    output: TensorData, lse: TensorData,
+    scale: number, causal: boolean,
+): [TensorData, TensorData, TensorData] {
+    validateFlashAttention(query, key, value, scale);
+    const gradQuery = TensorData.empty(query.shape);
+    const gradKey = TensorData.empty(key.shape);
+    const gradValue = TensorData.empty(value.shape);
+    tensorAttentionBackward(
+        gradQuery._storage, gradQuery._shape, gradQuery._stride,
+        gradKey._storage, gradKey._shape, gradKey._stride,
+        gradValue._storage, gradValue._shape, gradValue._stride,
+        gradOutput._storage, gradOutput._shape, gradOutput._stride,
+        query._storage, query._shape, query._stride,
+        key._storage, key._shape, key._stride,
+        value._storage, value._shape, value._stride,
+        output._storage, output._shape, output._stride,
+        lse._storage, lse._shape, lse._stride,
+        scale, causal,
+    );
+    return [gradQuery, gradKey, gradValue];
+}
+
 export abstract class TensorFunction{
     static forward(ctx: Context, ...t: Tensor[]): Tensor{
         throw new Error("Subclass must create forward");
@@ -516,6 +582,14 @@ export function logsoftmax(input: Tensor, dim: number): Tensor{
 
 export function rope(input: Tensor, sin: Tensor, cos: Tensor, offset: number = 0): Tensor {
     return Tensor.apply(RoPE(offset), input, sin, cos);
+}
+
+export function flashAttention(
+    query: Tensor, key: Tensor, value: Tensor,
+    causal: boolean = false, scale?: number,
+): Tensor {
+    const resolvedScale = scale ?? 1 / Math.sqrt(query.shape()[query.dims() - 1]!);
+    return Tensor.apply(FlashAttention(resolvedScale, causal), query, key, value);
 }
 
 export class Neg extends TensorFunction{
@@ -832,6 +906,32 @@ export function RoPE(offset: number = 0): typeof TensorFunction {
                 new Tensor(TensorData.fill(sin.shape(), 0)),
                 new Tensor(TensorData.fill(cos.shape(), 0)),
             ];
+        }
+    };
+}
+
+export function FlashAttention(scale: number, causal: boolean = false): typeof TensorFunction {
+    return class extends TensorFunction {
+        static forward(ctx: Context, query: Tensor, key: Tensor, value: Tensor): Tensor {
+            const result = flashAttentionData(query.data, key.data, value.data, scale, causal);
+            const output = new Tensor(result.output);
+            if (ctx.noGrad) {
+                result.lse.release();
+            } else {
+                ctx.saveForBackward(query, key, value, output, new Tensor(result.lse));
+            }
+            return output;
+        }
+
+        static backward(ctx: Context, gradOutput: Tensor): Tensor[] {
+            const [query, key, value, output, lse] = ctx.savedValues as Tensor[];
+            const [gradQuery, gradKey, gradValue] = flashAttentionBackward(
+                gradOutput.data,
+                query.data, key.data, value.data,
+                output.data, lse.data,
+                scale, causal,
+            );
+            return [new Tensor(gradQuery), new Tensor(gradKey), new Tensor(gradValue)];
         }
     };
 }

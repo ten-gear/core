@@ -341,6 +341,353 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 }`;
 }
 
+export const ATTENTION_TILE = 8;
+
+export function attentionShader(headDim: number): string {
+    return `
+@group(0) @binding(0) var<storage, read> query_data: array<f32>;
+@group(0) @binding(1) var<storage, read> key_data: array<f32>;
+@group(0) @binding(2) var<storage, read> value_data: array<f32>;
+@group(0) @binding(3) var<storage, read_write> output_data: array<f32>;
+@group(0) @binding(4) var<storage, read_write> lse_data: array<f32>;
+@group(0) @binding(5) var<storage, read> params: array<u32>;
+var<workgroup> query_tile: array<f32, ${ATTENTION_TILE * headDim}>;
+var<workgroup> key_tile: array<f32, ${ATTENTION_TILE * headDim}>;
+var<workgroup> value_tile: array<f32, ${ATTENTION_TILE * headDim}>;
+var<workgroup> score_tile: array<f32, ${ATTENTION_TILE * ATTENTION_TILE}>;
+@compute @workgroup_size(${ATTENTION_TILE})
+fn main(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index) tid: u32) {
+    let heads = params[1];
+    let time = params[2];
+    let query_tiles = (time + ${ATTENTION_TILE - 1}u) / ${ATTENTION_TILE}u;
+    let query_tile_index = wid.x % query_tiles;
+    let head = (wid.x / query_tiles) % heads;
+    let batch = wid.x / (query_tiles * heads);
+    let query_time = query_tile_index * ${ATTENTION_TILE}u + tid;
+    let row_valid = query_time < time;
+    let scale = bitcast<f32>(params[4]);
+    let causal = params[5] != 0u;
+    var accumulator: array<f32, ${headDim}>;
+    var maximum = -3.402823466e+38;
+    var denominator = 0.0;
+
+    for (var index = tid; index < ${ATTENTION_TILE * headDim}u; index += ${ATTENTION_TILE}u) {
+        let row = index / ${headDim}u;
+        let feature = index % ${headDim}u;
+        let row_time = query_tile_index * ${ATTENTION_TILE}u + row;
+        query_tile[index] = select(0.0, query_data[
+            batch * params[13] + head * params[14] + row_time * params[15] + feature * params[16]
+        ], row_time < time);
+    }
+    for (var feature = 0u; feature < ${headDim}u; feature++) {
+        accumulator[feature] = 0.0;
+    }
+    workgroupBarrier();
+
+    for (var key_start = 0u; key_start < time; key_start += ${ATTENTION_TILE}u) {
+        for (var index = tid; index < ${ATTENTION_TILE * headDim}u; index += ${ATTENTION_TILE}u) {
+            let row = index / ${headDim}u;
+            let feature = index % ${headDim}u;
+            let key_time = key_start + row;
+            key_tile[index] = select(0.0, key_data[
+                batch * params[17] + head * params[18] + key_time * params[19] + feature * params[20]
+            ], key_time < time);
+            value_tile[index] = select(0.0, value_data[
+                batch * params[21] + head * params[22] + key_time * params[23] + feature * params[24]
+            ], key_time < time);
+        }
+        workgroupBarrier();
+
+        for (var key_row = 0u; key_row < ${ATTENTION_TILE}u; key_row++) {
+            let key_time = key_start + key_row;
+            var score = -3.402823466e+38;
+            if (row_valid && key_time < time && (!causal || key_time <= query_time)) {
+                score = 0.0;
+                for (var feature = 0u; feature < ${headDim}u; feature++) {
+                    score += query_tile[tid * ${headDim}u + feature]
+                        * key_tile[key_row * ${headDim}u + feature];
+                }
+                score *= scale;
+            }
+            score_tile[tid * ${ATTENTION_TILE}u + key_row] = score;
+        }
+        workgroupBarrier();
+
+        if (row_valid) {
+            var tile_maximum = -3.402823466e+38;
+            for (var key_row = 0u; key_row < ${ATTENTION_TILE}u; key_row++) {
+                tile_maximum = max(tile_maximum, score_tile[tid * ${ATTENTION_TILE}u + key_row]);
+            }
+            let next_maximum = max(maximum, tile_maximum);
+            let previous_scale = exp(maximum - next_maximum);
+            denominator *= previous_scale;
+            for (var feature = 0u; feature < ${headDim}u; feature++) {
+                accumulator[feature] *= previous_scale;
+            }
+            for (var key_row = 0u; key_row < ${ATTENTION_TILE}u; key_row++) {
+                let score = score_tile[tid * ${ATTENTION_TILE}u + key_row];
+                var probability_scale = 0.0;
+                if (score > -3.4028230e+38) {
+                    probability_scale = exp(score - next_maximum);
+                }
+                denominator += probability_scale;
+                for (var feature = 0u; feature < ${headDim}u; feature++) {
+                    accumulator[feature] += probability_scale
+                        * value_tile[key_row * ${headDim}u + feature];
+                }
+            }
+            maximum = next_maximum;
+        }
+        workgroupBarrier();
+    }
+
+    if (row_valid) {
+        for (var feature = 0u; feature < ${headDim}u; feature++) {
+            output_data[
+                batch * params[6] + head * params[7] + query_time * params[8] + feature * params[9]
+            ] = accumulator[feature] / denominator;
+        }
+        lse_data[batch * params[10] + head * params[11] + query_time * params[12]]
+            = maximum + log(denominator);
+    }
+}`;
+}
+
+export function attentionBackwardQueryShader(headDim: number): string {
+    return `
+@group(0) @binding(0) var<storage, read_write> grad_query_data: array<f32>;
+@group(0) @binding(1) var<storage, read> grad_out_data: array<f32>;
+@group(0) @binding(2) var<storage, read> query_data: array<f32>;
+@group(0) @binding(3) var<storage, read> key_data: array<f32>;
+@group(0) @binding(4) var<storage, read> value_data: array<f32>;
+@group(0) @binding(5) var<storage, read> output_data: array<f32>;
+@group(0) @binding(6) var<storage, read> lse_data: array<f32>;
+@group(0) @binding(7) var<storage, read> params: array<u32>;
+var<workgroup> query_tile: array<f32, ${ATTENTION_TILE * headDim}>;
+var<workgroup> grad_out_tile: array<f32, ${ATTENTION_TILE * headDim}>;
+var<workgroup> key_tile: array<f32, ${ATTENTION_TILE * headDim}>;
+var<workgroup> value_tile: array<f32, ${ATTENTION_TILE * headDim}>;
+@compute @workgroup_size(${ATTENTION_TILE})
+fn main(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index) tid: u32) {
+    let heads = params[1];
+    let time = params[2];
+    let query_tiles = (time + ${ATTENTION_TILE - 1}u) / ${ATTENTION_TILE}u;
+    let query_tile_index = wid.x % query_tiles;
+    let head = (wid.x / query_tiles) % heads;
+    let batch = wid.x / (query_tiles * heads);
+    let query_time = query_tile_index * ${ATTENTION_TILE}u + tid;
+    let row_valid = query_time < time;
+    let scale = bitcast<f32>(params[4]);
+    let causal = params[5] != 0u;
+    var accumulator: array<f32, ${headDim}>;
+    var delta = 0.0;
+
+    for (var index = tid; index < ${ATTENTION_TILE * headDim}u; index += ${ATTENTION_TILE}u) {
+        let row = index / ${headDim}u;
+        let feature = index % ${headDim}u;
+        let row_time = query_tile_index * ${ATTENTION_TILE}u + row;
+        query_tile[index] = select(0.0, query_data[
+            batch * params[14] + head * params[15] + row_time * params[16] + feature * params[17]
+        ], row_time < time);
+        grad_out_tile[index] = select(0.0, grad_out_data[
+            batch * params[10] + head * params[11] + row_time * params[12] + feature * params[13]
+        ], row_time < time);
+    }
+    for (var feature = 0u; feature < ${headDim}u; feature++) {
+        accumulator[feature] = 0.0;
+        if (row_valid) {
+            delta += output_data[
+                batch * params[26] + head * params[27] + query_time * params[28] + feature * params[29]
+            ] * grad_out_tile[tid * ${headDim}u + feature];
+        }
+    }
+    workgroupBarrier();
+
+    for (var key_start = 0u; key_start < time; key_start += ${ATTENTION_TILE}u) {
+        for (var index = tid; index < ${ATTENTION_TILE * headDim}u; index += ${ATTENTION_TILE}u) {
+            let row = index / ${headDim}u;
+            let feature = index % ${headDim}u;
+            let key_time = key_start + row;
+            key_tile[index] = select(0.0, key_data[
+                batch * params[18] + head * params[19] + key_time * params[20] + feature * params[21]
+            ], key_time < time);
+            value_tile[index] = select(0.0, value_data[
+                batch * params[22] + head * params[23] + key_time * params[24] + feature * params[25]
+            ], key_time < time);
+        }
+        workgroupBarrier();
+
+        if (row_valid) {
+            let row_lse = lse_data[
+                batch * params[30] + head * params[31] + query_time * params[32]
+            ];
+            for (var key_row = 0u; key_row < ${ATTENTION_TILE}u; key_row++) {
+                let key_time = key_start + key_row;
+                if (key_time < time && (!causal || key_time <= query_time)) {
+                    var query_key_dot = 0.0;
+                    var grad_value_dot = 0.0;
+                    for (var feature = 0u; feature < ${headDim}u; feature++) {
+                        query_key_dot += query_tile[tid * ${headDim}u + feature]
+                            * key_tile[key_row * ${headDim}u + feature];
+                        grad_value_dot += grad_out_tile[tid * ${headDim}u + feature]
+                            * value_tile[key_row * ${headDim}u + feature];
+                    }
+                    let probability = exp(scale * query_key_dot - row_lse);
+                    let grad_score = probability * (grad_value_dot - delta);
+                    for (var feature = 0u; feature < ${headDim}u; feature++) {
+                        accumulator[feature] += scale * grad_score
+                            * key_tile[key_row * ${headDim}u + feature];
+                    }
+                }
+            }
+        }
+        workgroupBarrier();
+    }
+
+    if (row_valid) {
+        for (var feature = 0u; feature < ${headDim}u; feature++) {
+            grad_query_data[
+                batch * params[6] + head * params[7] + query_time * params[8] + feature * params[9]
+            ] = accumulator[feature];
+        }
+    }
+}`;
+}
+
+export function attentionBackwardKeyValueShader(headDim: number): string {
+    return `
+@group(0) @binding(0) var<storage, read_write> grad_key_data: array<f32>;
+@group(0) @binding(1) var<storage, read_write> grad_value_data: array<f32>;
+@group(0) @binding(2) var<storage, read> grad_out_data: array<f32>;
+@group(0) @binding(3) var<storage, read> query_data: array<f32>;
+@group(0) @binding(4) var<storage, read> key_data: array<f32>;
+@group(0) @binding(5) var<storage, read> value_data: array<f32>;
+@group(0) @binding(6) var<storage, read> output_data: array<f32>;
+@group(0) @binding(7) var<storage, read> lse_data: array<f32>;
+struct AttentionBackwardKeyValueParams {
+    dimensions: vec4u,
+    config: vec4u,
+    grad_key_stride: vec4u,
+    grad_value_stride: vec4u,
+    grad_out_stride: vec4u,
+    query_stride: vec4u,
+    key_stride: vec4u,
+    value_stride: vec4u,
+    out_stride: vec4u,
+    lse_stride: vec4u,
+}
+@group(0) @binding(8) var<uniform> p: AttentionBackwardKeyValueParams;
+var<workgroup> key_tile: array<f32, ${ATTENTION_TILE * headDim}>;
+var<workgroup> value_tile: array<f32, ${ATTENTION_TILE * headDim}>;
+var<workgroup> query_tile: array<f32, ${ATTENTION_TILE * headDim}>;
+var<workgroup> grad_out_tile: array<f32, ${ATTENTION_TILE * headDim}>;
+var<workgroup> delta_tile: array<f32, ${ATTENTION_TILE}>;
+@compute @workgroup_size(${ATTENTION_TILE})
+fn main(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index) tid: u32) {
+    let heads = p.dimensions.y;
+    let time = p.dimensions.z;
+    let key_tiles = (time + ${ATTENTION_TILE - 1}u) / ${ATTENTION_TILE}u;
+    let key_tile_index = wid.x % key_tiles;
+    let head = (wid.x / key_tiles) % heads;
+    let batch = wid.x / (key_tiles * heads);
+    let key_time = key_tile_index * ${ATTENTION_TILE}u + tid;
+    let row_valid = key_time < time;
+    let scale = bitcast<f32>(p.config.x);
+    let causal = p.config.y != 0u;
+    var grad_key_accumulator: array<f32, ${headDim}>;
+    var grad_value_accumulator: array<f32, ${headDim}>;
+
+    for (var index = tid; index < ${ATTENTION_TILE * headDim}u; index += ${ATTENTION_TILE}u) {
+        let row = index / ${headDim}u;
+        let feature = index % ${headDim}u;
+        let row_time = key_tile_index * ${ATTENTION_TILE}u + row;
+        key_tile[index] = select(0.0, key_data[
+            batch * p.key_stride.x + head * p.key_stride.y
+            + row_time * p.key_stride.z + feature * p.key_stride.w
+        ], row_time < time);
+        value_tile[index] = select(0.0, value_data[
+            batch * p.value_stride.x + head * p.value_stride.y
+            + row_time * p.value_stride.z + feature * p.value_stride.w
+        ], row_time < time);
+    }
+    for (var feature = 0u; feature < ${headDim}u; feature++) {
+        grad_key_accumulator[feature] = 0.0;
+        grad_value_accumulator[feature] = 0.0;
+    }
+    workgroupBarrier();
+
+    for (var query_start = 0u; query_start < time; query_start += ${ATTENTION_TILE}u) {
+        for (var index = tid; index < ${ATTENTION_TILE * headDim}u; index += ${ATTENTION_TILE}u) {
+            let row = index / ${headDim}u;
+            let feature = index % ${headDim}u;
+            let query_time = query_start + row;
+            query_tile[index] = select(0.0, query_data[
+                batch * p.query_stride.x + head * p.query_stride.y
+                + query_time * p.query_stride.z + feature * p.query_stride.w
+            ], query_time < time);
+            grad_out_tile[index] = select(0.0, grad_out_data[
+                batch * p.grad_out_stride.x + head * p.grad_out_stride.y
+                + query_time * p.grad_out_stride.z + feature * p.grad_out_stride.w
+            ], query_time < time);
+        }
+        let query_time_for_delta = query_start + tid;
+        var delta = 0.0;
+        if (query_time_for_delta < time) {
+            for (var feature = 0u; feature < ${headDim}u; feature++) {
+                delta += output_data[
+                    batch * p.out_stride.x + head * p.out_stride.y
+                    + query_time_for_delta * p.out_stride.z + feature * p.out_stride.w
+                ] * grad_out_tile[tid * ${headDim}u + feature];
+            }
+        }
+        delta_tile[tid] = delta;
+        workgroupBarrier();
+
+        if (row_valid) {
+            for (var query_row = 0u; query_row < ${ATTENTION_TILE}u; query_row++) {
+                let query_time = query_start + query_row;
+                if (query_time < time && (!causal || key_time <= query_time)) {
+                    var query_key_dot = 0.0;
+                    var grad_value_dot = 0.0;
+                    for (var feature = 0u; feature < ${headDim}u; feature++) {
+                        query_key_dot += query_tile[query_row * ${headDim}u + feature]
+                            * key_tile[tid * ${headDim}u + feature];
+                        grad_value_dot += grad_out_tile[query_row * ${headDim}u + feature]
+                            * value_tile[tid * ${headDim}u + feature];
+                    }
+                    let row_lse = lse_data[
+                        batch * p.lse_stride.x + head * p.lse_stride.y
+                        + query_time * p.lse_stride.z
+                    ];
+                    let probability = exp(scale * query_key_dot - row_lse);
+                    let grad_score = probability * (grad_value_dot - delta_tile[query_row]);
+                    for (var feature = 0u; feature < ${headDim}u; feature++) {
+                        grad_key_accumulator[feature] += scale * grad_score
+                            * query_tile[query_row * ${headDim}u + feature];
+                        grad_value_accumulator[feature] += probability
+                            * grad_out_tile[query_row * ${headDim}u + feature];
+                    }
+                }
+            }
+        }
+        workgroupBarrier();
+    }
+
+    if (row_valid) {
+        for (var feature = 0u; feature < ${headDim}u; feature++) {
+            grad_key_data[
+                batch * p.grad_key_stride.x + head * p.grad_key_stride.y
+                + key_time * p.grad_key_stride.z + feature * p.grad_key_stride.w
+            ] = grad_key_accumulator[feature];
+            grad_value_data[
+                batch * p.grad_value_stride.x + head * p.grad_value_stride.y
+                + key_time * p.grad_value_stride.z + feature * p.grad_value_stride.w
+            ] = grad_value_accumulator[feature];
+        }
+    }
+}`;
+}
+
 export const GATHER_SHADER = `
 @group(0) @binding(0) var<storage, read> indicies_data: array<f32>;
 @group(0) @binding(1) var<storage, read> values_data: array<f32>;

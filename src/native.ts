@@ -64,6 +64,28 @@ export type RopeNative = (
     offset: number,
 ) => void;
 
+export type AttentionNative = (
+    out: NativeStorage, outShape: Shape, outStride: Stride,
+    lse: NativeStorage, lseShape: Shape, lseStride: Stride,
+    query: NativeStorage, queryShape: Shape, queryStride: Stride,
+    key: NativeStorage, keyShape: Shape, keyStride: Stride,
+    value: NativeStorage, valueShape: Shape, valueStride: Stride,
+    scale: number, causal: boolean,
+) => void;
+
+export type AttentionBackwardNative = (
+    gradQuery: NativeStorage, gradQueryShape: Shape, gradQueryStride: Stride,
+    gradKey: NativeStorage, gradKeyShape: Shape, gradKeyStride: Stride,
+    gradValue: NativeStorage, gradValueShape: Shape, gradValueStride: Stride,
+    gradOut: NativeStorage, gradOutShape: Shape, gradOutStride: Stride,
+    query: NativeStorage, queryShape: Shape, queryStride: Stride,
+    key: NativeStorage, keyShape: Shape, keyStride: Stride,
+    value: NativeStorage, valueShape: Shape, valueStride: Stride,
+    out: NativeStorage, outShape: Shape, outStride: Stride,
+    lse: NativeStorage, lseShape: Shape, lseStride: Stride,
+    scale: number, causal: boolean,
+) => void;
+
 // Names match the strings addon.cc puts on `exports`.
 export type NativeAddon = {
     mapNeg: MapNative;
@@ -150,6 +172,8 @@ export type NativeAddon = {
     logSoftmaxBackward: SoftmaxBackwardNative;
     rope: RopeNative;
     ropeBackward: RopeNative;
+    attention: AttentionNative;
+    attentionBackward: AttentionBackwardNative;
 };
 
 // Set by initBackend(). Keeping this named export preserves the low-level
