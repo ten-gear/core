@@ -157,6 +157,7 @@ __global__ void attention_backward_query_kernel(
     __shared__ float grad_query_tile[QueryTile * HeadDim];
     __shared__ float key_tile[KeyTile * HeadDim];
     __shared__ float value_tile[KeyTile * HeadDim];
+    __shared__ float score_tile[QueryTile * KeyTile];
     __shared__ float delta[QueryTile];
 
     const int32_t time = query_layout.shape[2];
@@ -180,15 +181,20 @@ __global__ void attention_backward_query_kernel(
             : 0.0f;
         grad_query_tile[index] = 0.0f;
     }
-    if (tid < QueryTile) {
-        const int32_t query_time = query_start + tid;
-        float total = 0.0f;
+    for (int32_t row = tid; row < QueryTile; row += blockDim.x)
+        delta[row] = 0.0f;
+    __syncthreads();
+
+    for (int32_t index = tid; index < QueryTile * HeadDim; index += blockDim.x) {
+        const int32_t row = index / HeadDim;
+        const int32_t feature = index % HeadDim;
+        const int32_t query_time = query_start + row;
         if (query_time < time) {
-            for (int32_t feature = 0; feature < HeadDim; feature++)
-                total += out[position4(out_layout, batch, head, query_time, feature)]
-                    * grad_out_tile[tid * HeadDim + feature];
+            atomicAdd(
+                &delta[row],
+                out[position4(out_layout, batch, head, query_time, feature)]
+                    * grad_out_tile[index]);
         }
-        delta[tid] = total;
     }
     __syncthreads();
 
@@ -206,28 +212,47 @@ __global__ void attention_backward_query_kernel(
         }
         __syncthreads();
 
-        if (tid < QueryTile) {
-            const int32_t query_time = query_start + tid;
-            if (query_time < time) {
-                const float row_lse = lse[position3(lse_layout, batch, head, query_time)];
-                for (int32_t key_row = 0; key_row < KeyTile; key_row++) {
-                    const int32_t key_time = key_start + key_row;
-                    if (key_time >= time || (causal && key_time > query_time)) continue;
-                    float query_key_dot = 0.0f;
-                    float grad_value_dot = 0.0f;
-                    for (int32_t feature = 0; feature < HeadDim; feature++) {
-                        query_key_dot += query_tile[tid * HeadDim + feature]
-                            * key_tile[key_row * HeadDim + feature];
-                        grad_value_dot += grad_out_tile[tid * HeadDim + feature]
-                            * value_tile[key_row * HeadDim + feature];
-                    }
-                    const float probability = expf(scale * query_key_dot - row_lse);
-                    const float grad_score = probability * (grad_value_dot - delta[tid]);
-                    for (int32_t feature = 0; feature < HeadDim; feature++)
-                        grad_query_tile[tid * HeadDim + feature] += scale * grad_score
-                            * key_tile[key_row * HeadDim + feature];
-                }
+        for (int32_t index = tid; index < QueryTile * KeyTile; index += blockDim.x) {
+            const int32_t query_row = index / KeyTile;
+            const int32_t key_row = index % KeyTile;
+            const int32_t query_time = query_start + query_row;
+            const int32_t key_time = key_start + key_row;
+            float probability = 0.0f;
+            if (query_time < time && key_time < time && (!causal || key_time <= query_time)) {
+                float query_key_dot = 0.0f;
+                for (int32_t feature = 0; feature < HeadDim; feature++)
+                    query_key_dot += query_tile[query_row * HeadDim + feature]
+                        * key_tile[key_row * HeadDim + feature];
+                probability = expf(
+                    scale * query_key_dot
+                    - lse[position3(lse_layout, batch, head, query_time)]);
             }
+            score_tile[index] = probability;
+        }
+        __syncthreads();
+
+        for (int32_t index = tid; index < QueryTile * KeyTile; index += blockDim.x) {
+            const int32_t query_row = index / KeyTile;
+            const int32_t key_row = index % KeyTile;
+            const float probability = score_tile[index];
+            float grad_value_dot = 0.0f;
+            if (probability != 0.0f) {
+                for (int32_t feature = 0; feature < HeadDim; feature++)
+                    grad_value_dot += grad_out_tile[query_row * HeadDim + feature]
+                        * value_tile[key_row * HeadDim + feature];
+            }
+            score_tile[index] = probability * (grad_value_dot - delta[query_row]);
+        }
+        __syncthreads();
+
+        for (int32_t index = tid; index < QueryTile * HeadDim; index += blockDim.x) {
+            const int32_t query_row = index / HeadDim;
+            const int32_t feature = index % HeadDim;
+            float accumulator = grad_query_tile[index];
+            for (int32_t key_row = 0; key_row < KeyTile; key_row++)
+                accumulator += scale * score_tile[query_row * KeyTile + key_row]
+                    * key_tile[key_row * HeadDim + feature];
+            grad_query_tile[index] = accumulator;
         }
         __syncthreads();
     }
@@ -261,6 +286,8 @@ __global__ void attention_backward_key_value_kernel(
     __shared__ float grad_value_tile[Tile * HeadDim];
     __shared__ float query_tile[Tile * HeadDim];
     __shared__ float grad_out_tile[Tile * HeadDim];
+    __shared__ float probability_tile[Tile * Tile];
+    __shared__ float grad_score_tile[Tile * Tile];
     __shared__ float delta[Tile];
 
     const int32_t time = query_layout.shape[2];
@@ -299,45 +326,71 @@ __global__ void attention_backward_key_value_kernel(
                 ? grad_out[position4(grad_out_layout, batch, head, query_time, feature)]
                 : 0.0f;
         }
-        if (tid < Tile) {
-            const int32_t query_time = query_start + tid;
-            float total = 0.0f;
+        for (int32_t row = tid; row < Tile; row += blockDim.x)
+            delta[row] = 0.0f;
+        __syncthreads();
+
+        for (int32_t index = tid; index < Tile * HeadDim; index += blockDim.x) {
+            const int32_t row = index / HeadDim;
+            const int32_t feature = index % HeadDim;
+            const int32_t query_time = query_start + row;
             if (query_time < time) {
-                for (int32_t feature = 0; feature < HeadDim; feature++)
-                    total += out[position4(out_layout, batch, head, query_time, feature)]
-                        * grad_out_tile[tid * HeadDim + feature];
+                atomicAdd(
+                    &delta[row],
+                    out[position4(out_layout, batch, head, query_time, feature)]
+                        * grad_out_tile[index]);
             }
-            delta[tid] = total;
         }
         __syncthreads();
 
-        if (tid < Tile) {
-            const int32_t key_time = key_start + tid;
-            if (key_time < time) {
-                for (int32_t query_row = 0; query_row < Tile; query_row++) {
-                    const int32_t query_time = query_start + query_row;
-                    if (query_time >= time || (causal && key_time > query_time)) continue;
-                    float query_key_dot = 0.0f;
-                    float grad_value_dot = 0.0f;
-                    for (int32_t feature = 0; feature < HeadDim; feature++) {
-                        query_key_dot += query_tile[query_row * HeadDim + feature]
-                            * key_tile[tid * HeadDim + feature];
-                        grad_value_dot += grad_out_tile[query_row * HeadDim + feature]
-                            * value_tile[tid * HeadDim + feature];
-                    }
-                    const float probability = expf(
-                        scale * query_key_dot
-                        - lse[position3(lse_layout, batch, head, query_time)]);
-                    const float grad_score = probability
-                        * (grad_value_dot - delta[query_row]);
-                    for (int32_t feature = 0; feature < HeadDim; feature++) {
-                        grad_key_tile[tid * HeadDim + feature] += scale * grad_score
-                            * query_tile[query_row * HeadDim + feature];
-                        grad_value_tile[tid * HeadDim + feature] += probability
-                            * grad_out_tile[query_row * HeadDim + feature];
-                    }
-                }
+        for (int32_t index = tid; index < Tile * Tile; index += blockDim.x) {
+            const int32_t query_row = index / Tile;
+            const int32_t key_row = index % Tile;
+            const int32_t query_time = query_start + query_row;
+            const int32_t key_time = key_start + key_row;
+            float probability = 0.0f;
+            if (query_time < time && key_time < time && (!causal || key_time <= query_time)) {
+                float query_key_dot = 0.0f;
+                for (int32_t feature = 0; feature < HeadDim; feature++)
+                    query_key_dot += query_tile[query_row * HeadDim + feature]
+                        * key_tile[key_row * HeadDim + feature];
+                probability = expf(
+                    scale * query_key_dot
+                    - lse[position3(lse_layout, batch, head, query_time)]);
             }
+            probability_tile[index] = probability;
+        }
+        __syncthreads();
+
+        for (int32_t index = tid; index < Tile * Tile; index += blockDim.x) {
+            const int32_t query_row = index / Tile;
+            const int32_t key_row = index % Tile;
+            const float probability = probability_tile[index];
+            float grad_value_dot = 0.0f;
+            if (probability != 0.0f) {
+                for (int32_t feature = 0; feature < HeadDim; feature++)
+                    grad_value_dot += grad_out_tile[query_row * HeadDim + feature]
+                        * value_tile[key_row * HeadDim + feature];
+            }
+            grad_score_tile[index] = probability * (grad_value_dot - delta[query_row]);
+        }
+        __syncthreads();
+
+        for (int32_t index = tid; index < Tile * HeadDim; index += blockDim.x) {
+            const int32_t key_row = index / HeadDim;
+            const int32_t feature = index % HeadDim;
+            float key_accumulator = grad_key_tile[index];
+            float value_accumulator = grad_value_tile[index];
+            for (int32_t query_row = 0; query_row < Tile; query_row++) {
+                const float probability = probability_tile[query_row * Tile + key_row];
+                const float grad_score = grad_score_tile[query_row * Tile + key_row];
+                key_accumulator += scale * grad_score
+                    * query_tile[query_row * HeadDim + feature];
+                value_accumulator += probability
+                    * grad_out_tile[query_row * HeadDim + feature];
+            }
+            grad_key_tile[index] = key_accumulator;
+            grad_value_tile[index] = value_accumulator;
         }
         __syncthreads();
     }
