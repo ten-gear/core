@@ -2,7 +2,7 @@ import { randomFloat } from "./helperfunctions.js";
 import { Parameter } from "./module.js";
 import { Layer } from "./model.js";
 import { Tensor } from "./tensor.js";
-import { flashAttention, logsoftmax, maxpool2d, rope } from "./tensor_functions.js";
+import { flashAttention, logsoftmax, maxpool2d, rope, rparam, dropout } from "./tensor_functions.js";
 import { Shape, TensorData, writeStorage } from "./tensor_data.js";
 
 function heParameter(fanIn: number, shape: Shape): Tensor {
@@ -22,6 +22,21 @@ function zeroParameter(shape: Shape): Tensor {
     const tensor = new Tensor(TensorData.fill(shape, 0));
     tensor._requiresGrad(true);
     return tensor;
+}
+
+function onesParameter(shape: Shape): Tensor {
+    const tensor = new Tensor(TensorData.fill(shape, 1));
+    tensor._requiresGrad(true);
+    return tensor;
+}
+export function causalMask(seq: number): Tensor {
+    const values = new Float32Array(seq * seq);
+    for (let t = 0; t < seq; t++)
+        for (let s = 0; s < seq; s++)
+            if (s > t) values[t * seq + s] = -1e9;
+    const mask = new Tensor(TensorData.empty([1, 1, seq, seq]));
+    writeStorage(mask.data._storage, values);
+    return mask;
 }
 
 export function ropeFrequencies(seq: number, headDim: number, theta = 10000): { cos: Tensor; sin: Tensor } {
@@ -178,5 +193,78 @@ export class LogSoftmax extends Layer {
 
     forward(input: Tensor): Tensor {
         return logsoftmax(input, this.dim);
+    }
+}
+
+export class Embedding extends Layer {
+    readonly table: Parameter;
+    constructor(vocab: number, nEmbd: number) {
+        super();
+        this.table = this.addParameter("table", rparam([vocab, nEmbd], -0.02, 0.02));
+        (this.table.value as Tensor)._requiresGrad(true);
+    }
+    forward(ids: Tensor): Tensor {
+        return (this.table.value as Tensor).embedding(ids);
+    }
+}
+
+export class LayerNorm extends Layer {
+    readonly gamma: Parameter;
+    readonly beta: Parameter;
+    readonly epsilon: number;
+    constructor(nEmbd: number, epsilon = 1e-5) {
+        super();
+        this.epsilon = epsilon;
+        this.gamma = this.addParameter("gamma", onesParameter([nEmbd]));
+        this.beta = this.addParameter("beta", zeroParameter([nEmbd]));
+    }
+    forward(input: Tensor): Tensor {
+        return input.layernorm(this.gamma.value as Tensor, this.beta.value as Tensor, this.epsilon);
+    }
+}
+
+export class MHAFlashAttention extends Layer {
+    readonly nHead: number;
+    readonly headDim: number;
+    readonly q: Linear;
+    readonly k: Linear;
+    readonly v: Linear;
+    readonly out: Linear;
+    readonly rope: RoPE;
+    readonly dropoutRate: number;
+    constructor(nEmbd: number, nHead: number, maxSeq: number, dropout = 0) {
+        super();
+        if (nEmbd % nHead !== 0) throw new Error("nEmbd must divide by nHead");
+        this.nHead = nHead;
+        this.headDim = nEmbd / nHead;
+        this.dropoutRate = dropout;
+        this.q = new Linear(nEmbd, nEmbd);
+        this.k = new Linear(nEmbd, nEmbd);
+        this.v = new Linear(nEmbd, nEmbd);
+        this.out = new Linear(nEmbd, nEmbd);
+        this.rope = new RoPE(maxSeq, this.headDim);
+    }
+    forward(input: Tensor, offset = 0): Tensor {
+        const [batch, time, nEmbd] = input.shape();
+        const heads = (x: Tensor) =>  x.view(batch, time, this.nHead, this.headDim).permute(0, 2, 1, 3);
+        let q = this.rope.forward(heads(this.q.forward(input)), offset);
+        let k = this.rope.forward(heads(this.k.forward(input)), offset);
+        const v = heads(this.v.forward(input));
+        const context = flashAttention(q, k, v, true);
+        const mixed = context.permute(0, 2, 1, 3).tocontiguous().view(batch, time, nEmbd);
+        return dropout(this.out.forward(mixed), this.dropoutRate, !this.training);
+    }
+}
+
+export class MLP extends Layer {
+    readonly fc: Linear;
+    readonly proj: Linear;
+    constructor(nEmbd: number, factor = 4) {
+        super();
+        this.fc = new Linear(nEmbd, factor * nEmbd);
+        this.proj = new Linear(factor * nEmbd, nEmbd)
+    }
+    forward(input: Tensor): Tensor {
+        return this.proj.forward(this.fc.forward(input).gelu());
     }
 }
