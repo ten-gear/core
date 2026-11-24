@@ -117,9 +117,11 @@ export class Linear extends Layer {
     }
 
     forward(input: Tensor): Tensor {
-        return input
-            .matmul(this.weights.value as Tensor)
-            .add(this.bias.value as Tensor);
+        const shape = input.shape();
+        const rows = input.size() / this.inSize;
+        const flat = input.view(rows, this.inSize);
+        const out = flat.matmul(this.weights.value as Tensor).add(this.bias.value as Tensor);
+        return out.view(...shape.slice(0, -1), this.outSize);
     }
 }
 
