@@ -121,7 +121,7 @@ export type NativeAddon = {
     copyToHost: (storage: NativeStorage) => Float32Array;
     copyFromHost: (storage: NativeStorage, values: Float32Array) => void;
     synchronize: () => void;
-    backendInfo?: () => { kind: 'cuda' | 'cpu' };
+    backendInfo?: () => { kind: 'cuda' | 'cpu'; available?: boolean };
     sgd: (
         param: NativeStorage, shape: Shape, stride: Stride,
         grad: NativeStorage, gradShape: Shape, gradStride: Stride,
@@ -181,6 +181,31 @@ export type NativeAddon = {
 // into browser bundles at module evaluation time.
 export let native: NativeAddon | null = null;
 
+function nativePackageSuffix(platform: string, arch: string): string | null {
+    switch (`${platform}-${arch}`) {
+        case 'win32-x64': return 'win32-x64';
+        case 'linux-x64': return 'linux-x64-gnu';
+        case 'linux-arm64': return 'linux-arm64-gnu';
+        case 'darwin-arm64': return 'darwin-arm64';
+        case 'darwin-x64': return 'darwin-x64';
+        default: return null;
+    }
+}
+
+function warnNative(error: unknown): void {
+    if (process.env?.TSGRAD_DEBUG_BACKEND) console.warn('Unable to load native tensor backend', error);
+}
+
+function cudaReady(addon: NativeAddon): boolean {
+    try {
+        const info = addon.backendInfo?.();
+        return info?.kind === 'cuda' && info.available === true;
+    } catch (error) {
+        warnNative(error);
+        return false;
+    }
+}
+
 export async function loadNativeAddon(): Promise<NativeAddon | null> {
     if (native) return native;
     if (typeof process === 'undefined' || !process.versions?.node) return null;
@@ -193,14 +218,37 @@ export async function loadNativeAddon(): Promise<NativeAddon | null> {
         import(/* @vite-ignore */ fsName) as Promise<typeof import('node:fs')>,
         import(/* @vite-ignore */ urlName) as Promise<typeof import('node:url')>,
     ]);
+    const require = createRequire(import.meta.url);
     const addonRelativePath = ['..', 'backend', 'build', 'Release', 'tsgrad_native.node'].join('/');
     const addonPath = fileURLToPath(new URL(addonRelativePath, import.meta.url));
-    if (!existsSync(addonPath)) return null;
+    if (existsSync(addonPath)) {
+        try {
+            native = require(addonPath) as NativeAddon;
+            return native;
+        } catch (error) {
+            warnNative(error);
+        }
+    }
+
+    const suffix = nativePackageSuffix(process.platform, process.arch);
+    if (!suffix) return null;
+
+    const cudaName = `@tsgrad/core-${suffix}-cuda12`;
     try {
-        native = createRequire(import.meta.url)(addonPath) as NativeAddon;
+        const cuda = require(cudaName) as NativeAddon;
+        if (cudaReady(cuda)) {
+            native = cuda;
+            return native;
+        }
     } catch (error) {
-        if (process.env?.TSGRAD_DEBUG_BACKEND) console.warn('Unable to load native tensor backend', error);
+        warnNative(error);
+    }
+
+    try {
+        native = require(`@tsgrad/core-${suffix}`) as NativeAddon;
+        return native;
+    } catch (error) {
+        warnNative(error);
         return null;
     }
-    return native;
 }

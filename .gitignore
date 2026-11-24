@@ -1,4 +1,10 @@
 node_modules/
 dist/
+demo-dist/
 project/data/
 backend/build/
+npm/**/*.node
+npm/**/*.dll
+npm/**/*.dylib
+npm/**/*.so
+npm/**/*.so.*

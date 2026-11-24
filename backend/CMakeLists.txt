@@ -8,6 +8,10 @@
 #   cmake -S backend -B backend/build -DTSGRAD_CUDA=OFF
 #   cmake --build backend/build --config Release
 #
+# A local CUDA build targets the machine's GPU. Release builds pass an
+# explicit list so one binary covers the published architectures:
+#   cmake -S backend -B backend/build -DCMAKE_CUDA_ARCHITECTURES=75;80;86;89;90
+#
 # TSGRAD_CUDA=ON (the default) compiles src/cuda/*.cu when nvcc is installed.
 # Those files define tsgrad::cuda::*. The CPU files define tsgrad::*.
 # addon.cc calls the CPU entry points. A CPU function may call the matching
@@ -119,8 +123,12 @@ if(TSGRAD_CUDA)
     include(CheckLanguage)
     check_language(CUDA)
     if(CMAKE_CUDA_COMPILER)
+        set(_tsgrad_cuda_arch "${CMAKE_CUDA_ARCHITECTURES}")
         enable_language(CUDA)
         find_package(CUDAToolkit REQUIRED)
+        if(NOT _tsgrad_cuda_arch)
+            set(_tsgrad_cuda_arch native)
+        endif()
         target_sources(tsgrad_native PRIVATE
             src/cuda/context.cu
             src/cuda/elementwise.cu
@@ -135,12 +143,27 @@ if(TSGRAD_CUDA)
             src/cuda/rope.cu
             src/cuda/attention.cu
         )
-        set_target_properties(tsgrad_native PROPERTIES CUDA_ARCHITECTURES native)
+        set_target_properties(tsgrad_native PROPERTIES CUDA_ARCHITECTURES "${_tsgrad_cuda_arch}")
+        target_include_directories(tsgrad_native PRIVATE "${CUDAToolkit_INCLUDE_DIRS}")
         target_link_libraries(tsgrad_native PRIVATE CUDA::cudart CUDA::cublas)
         target_compile_definitions(tsgrad_native PRIVATE TSGRAD_HAS_CUDA)
     else()
         message(WARNING "nvcc was not found. The addon will contain the CPU entry points only. src/cuda/*.cu stays in the tree.")
     endif()
+endif()
+
+if(APPLE)
+    set_target_properties(tsgrad_native PROPERTIES
+        BUILD_RPATH "@loader_path"
+        INSTALL_RPATH "@loader_path"
+        BUILD_WITH_INSTALL_RPATH TRUE
+    )
+elseif(UNIX)
+    set_target_properties(tsgrad_native PROPERTIES
+        BUILD_RPATH "\$ORIGIN"
+        INSTALL_RPATH "\$ORIGIN"
+        BUILD_WITH_INSTALL_RPATH TRUE
+    )
 endif()
 
 if(MSVC)
