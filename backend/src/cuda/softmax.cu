@@ -1,6 +1,7 @@
 #include "tsgrad/ops.h"
 #include "cudahelpers.hpp"
 #include <cuda_runtime.h>
+#include <math_constants.h>
 #include <format>
 
 namespace tsgrad::cuda {
