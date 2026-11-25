@@ -1,7 +1,7 @@
 {
-  "name": "@tsgrad/core-darwin-x64",
+  "name": "tengear-darwin-x64",
   "version": "0.0.0",
-  "description": "Prebuilt native CPU addon for @tsgrad/core on macOS x64.",
+  "description": "Prebuilt native CPU addon for tengear on macOS x64.",
   "license": "MIT",
   "os": ["darwin"],
   "cpu": ["x64"],
@@ -10,7 +10,7 @@
   "publishConfig": { "access": "public" },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/tsgrad/core.git",
+    "url": "git+https://github.com/ten-gear/core.git",
     "directory": "npm/darwin-x64"
   }
 }

@@ -1,7 +1,7 @@
 {
-  "name": "@tsgrad/core-linux-x64-gnu-cuda12",
+  "name": "tengear-linux-x64-gnu-cuda12",
   "version": "0.0.0",
-  "description": "Prebuilt native CUDA 12 addon for @tsgrad/core on Linux x64 (glibc).",
+  "description": "Prebuilt native CUDA 12 addon for tengear on Linux x64 (glibc).",
   "license": "MIT",
   "os": ["linux"],
   "cpu": ["x64"],
@@ -11,7 +11,7 @@
   "publishConfig": { "access": "public" },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/tsgrad/core.git",
+    "url": "git+https://github.com/ten-gear/core.git",
     "directory": "npm/linux-x64-gnu-cuda12"
   }
 }

@@ -10,6 +10,6 @@ if (!file || !version) {
 const pkg = JSON.parse(readFileSync(file, 'utf8'));
 pkg.version = version;
 for (const dep of Object.keys(pkg.optionalDependencies ?? {})) {
-    if (dep.startsWith('@tsgrad/core-')) pkg.optionalDependencies[dep] = version;
+    if (dep.startsWith('tengear-')) pkg.optionalDependencies[dep] = version;
 }
 writeFileSync(file, JSON.stringify(pkg, null, 2) + '\n');

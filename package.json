@@ -1,5 +1,5 @@
 {
-  "name": "@tsgrad/core",
+  "name": "tengear",
   "version": "0.0.0",
   "description": "TypeScript tensor library with a native CPU addon, optional CUDA, and WebGPU.",
   "type": "module",
@@ -35,7 +35,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/tsgrad/core.git"
+    "url": "git+https://github.com/ten-gear/core.git"
   },
   "keywords": [
     "tensors",
@@ -46,9 +46,9 @@
   "author": "",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/tsgrad/core/issues"
+    "url": "https://github.com/ten-gear/core/issues"
   },
-  "homepage": "https://github.com/tsgrad/core#readme",
+  "homepage": "https://github.com/ten-gear/core#readme",
   "devDependencies": {
     "@types/node": "^26.6.5",
     "@types/plotly.js": "^3.0.13",
@@ -65,13 +65,13 @@
     "js-tiktoken": "^1.0.21"
   },
   "optionalDependencies": {
-    "@tsgrad/core-darwin-arm64": "0.0.0",
-    "@tsgrad/core-darwin-x64": "0.0.0",
-    "@tsgrad/core-linux-arm64-gnu": "0.0.0",
-    "@tsgrad/core-linux-x64-gnu": "0.0.0",
-    "@tsgrad/core-linux-x64-gnu-cuda12": "0.0.0",
-    "@tsgrad/core-win32-x64": "0.0.0",
-    "@tsgrad/core-win32-x64-cuda12": "0.0.0",
+    "tengear-darwin-arm64": "0.0.0",
+    "tengear-darwin-x64": "0.0.0",
+    "tengear-linux-arm64-gnu": "0.0.0",
+    "tengear-linux-x64-gnu": "0.0.0",
+    "tengear-linux-x64-gnu-cuda12": "0.0.0",
+    "tengear-win32-x64": "0.0.0",
+    "tengear-win32-x64-cuda12": "0.0.0",
     "webgpu": "^0.6.2"
   }
 }

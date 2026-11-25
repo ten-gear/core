@@ -1,4 +1,4 @@
-# tsgrad
+# tengear
 
 A small PyTorch-like ML framework built from scratch in TypeScript, with no external ML libraries, all math implemented by hand.
 
@@ -7,15 +7,15 @@ Inspired by [@srush_nlp](https://x.com/srush_nlp)'s [minitorch](https://github.c
 ## Install
 
 ```bash
-npm install @tsgrad/core
+npm install tengear
 ```
 
-`@tsgrad/core` ships the compiled library, TypeScript declarations, the pure TypeScript CPU backend, and the WebGPU backend. npm also installs the optional native addon whose `os` and `cpu` match the machine. Windows x64 and Linux x64 install two addons, CPU and CUDA 12, because both declare the same platform. The loader uses the CUDA addon when `cudaGetDeviceCount` reports a device, and otherwise uses the CPU addon. The CUDA package bundles the CUDA runtime, so a user needs an NVIDIA driver and does not need the CUDA toolkit.
+`tengear` ships the compiled library, TypeScript declarations, the pure TypeScript CPU backend, and the WebGPU backend. npm also installs the optional native addon whose `os` and `cpu` match the machine. Windows x64 and Linux x64 install two addons, CPU and CUDA 12, because both declare the same platform. The loader uses the CUDA addon when `cudaGetDeviceCount` reports a device, and otherwise uses the CPU addon. The CUDA package bundles the CUDA runtime, so a user needs an NVIDIA driver and does not need the CUDA toolkit.
 
 Alpine and other platforms without a published addon still install. `auto` continues to WebGPU, then the TypeScript CPU backend.
 
 ```typescript
-import { initBackend, Tensor } from "@tsgrad/core";
+import { initBackend, Tensor } from "tengear";
 
 await initBackend({ backend: "auto" });
 ```

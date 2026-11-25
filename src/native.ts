@@ -233,7 +233,7 @@ export async function loadNativeAddon(): Promise<NativeAddon | null> {
     const suffix = nativePackageSuffix(process.platform, process.arch);
     if (!suffix) return null;
 
-    const cudaName = `@tsgrad/core-${suffix}-cuda12`;
+    const cudaName = `tengear-${suffix}-cuda12`;
     try {
         const cuda = require(cudaName) as NativeAddon;
         if (cudaReady(cuda)) {
@@ -245,7 +245,7 @@ export async function loadNativeAddon(): Promise<NativeAddon | null> {
     }
 
     try {
-        native = require(`@tsgrad/core-${suffix}`) as NativeAddon;
+        native = require(`tengear-${suffix}`) as NativeAddon;
         return native;
     } catch (error) {
         warnNative(error);
