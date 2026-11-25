@@ -28,6 +28,8 @@
     "build:demo": "vite build",
     "typecheck": "tsc --noEmit",
     "benchmark:backend": "tsx project/benchmark_backend.ts",
+    "prepare:tinystories": "tsx project/prepare_tinystories.ts",
+    "train:gpt2": "tsx project/train_gpt_2.ts",
     "preview": "vite preview",
     "test": "vitest"
   },
@@ -58,6 +60,9 @@
     "typescript": "^7.0.2",
     "vite": "^8.2.2",
     "vitest": "^4.1.11"
+  },
+  "dependencies": {
+    "js-tiktoken": "^1.0.21"
   },
   "optionalDependencies": {
     "@tsgrad/core-darwin-arm64": "0.0.0",
