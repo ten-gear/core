@@ -229,7 +229,7 @@ jobs:
       - name: Install dependencies and run tests
         shell: bash
         env:
-          TSGRAD_DISABLE_WEBGPU: ${{ runner.os == 'Windows' && '1' || '' }}
+          TSGRAD_DISABLE_WEBGPU: ${{ (runner.os == 'Windows' || runner.os == 'macOS') && '1' || '' }}
         run: |
           npm install
           npm test
