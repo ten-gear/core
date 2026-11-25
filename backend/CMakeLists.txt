@@ -99,7 +99,7 @@ target_compile_definitions(tsgrad_native PRIVATE
 )
 
 if(MSVC)
-    target_compile_options(tsgrad_native PRIVATE /EHsc)
+    target_compile_options(tsgrad_native PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/EHsc>)
     if(CMAKE_SIZEOF_VOID_P EQUAL 8)
         set(NODE_LIB_MACHINE "x64")
     else()
