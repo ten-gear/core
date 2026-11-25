@@ -3,7 +3,7 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { basename, delimiter, join, resolve } from 'node:path';
 
 const LINUX_VENDOR = /^(libcudart|libcublas|libcublasLt|libnvJitLink|libnvrtc|libnvToolsExt)\.so/;
-const LINUX_SYSTEM = /^(libc|libm|libdl|librt|libpthread|libgcc_s|libstdc\+\+|ld-linux|libgomp|linux-vdso)\.so/;
+const LINUX_SYSTEM = /^(libc|libm|libdl|librt|libpthread|libgcc_s|libstdc\+\+|ld-linux(?:-[a-z0-9_]+)?|libgomp|linux-vdso)\.so/;
 const WINDOWS_SYSTEM = /^(kernel32|kernelbase|user32|advapi32|shell32|ole32|oleaut32|ws2_32|bcrypt|ntdll|dbghelp|psapi|shlwapi|gdi32|rpcrt4|combase|sechost|msvcrt|ucrtbase|vcruntime\d+(?:_\d+)?|msvcp\d+|concrt\d+|api-ms-win-.+)\.dll$/i;
 
 const sourceArg = process.argv[2];
