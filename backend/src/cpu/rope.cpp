@@ -23,15 +23,15 @@ void validate(const View& out, const View& in, const View& sin, const View& cos,
         std::span<const int32_t> out_shape{out.shape, static_cast<size_t>(out.rank)};
         std::span<const int32_t> in_shape{in.shape, static_cast<size_t>(in.rank)};
         throw std::runtime_error(std::format(
-            "rope received out and in with different shapes, received out.shape: {:n}, in.shape: {:n}",
-            out_shape, in_shape));
+            "rope received out and in with different shapes, received out.shape: {}, in.shape: {}",
+            shapeText(out_shape), shapeText(in_shape)));
     }
 
     const bool shape_ok = in.rank >= 2 && in.shape[in.rank - 1] > 0 && (in.shape[in.rank - 1] % 2) == 0;
     if (!shape_ok) {
         std::span<const int32_t> in_shape{in.shape, static_cast<size_t>(in.rank)};
         throw std::runtime_error(std::format(
-            "rope received bad in.shape, received in.shape: {:n}", in_shape));
+            "rope received bad in.shape, received in.shape: {}", shapeText(in_shape)));
     }
     if (offset < 0)
         throw std::runtime_error(std::format("rope received a negative offset: {}", offset));
@@ -46,8 +46,8 @@ void validate(const View& out, const View& in, const View& sin, const View& cos,
         std::span<const int32_t> sin_shape{sin.shape, static_cast<size_t>(sin.rank)};
         std::span<const int32_t> cos_shape{cos.shape, static_cast<size_t>(cos.rank)};
         throw std::runtime_error(std::format(
-            "rope received invalid sin/cos shapes, expected at least [{}, {}] for both, received sin.shape: {:n}, cos.shape: {:n}",
-            needed, half, sin_shape, cos_shape));
+            "rope received invalid sin/cos shapes, expected at least [{}, {}] for both, received sin.shape: {}, cos.shape: {}",
+            needed, half, shapeText(sin_shape), shapeText(cos_shape)));
     }
 }
 

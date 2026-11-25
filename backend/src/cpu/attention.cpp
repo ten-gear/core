@@ -16,8 +16,8 @@ void require_shape(const View& actual, const View& expected, const char* operati
     std::span<const int32_t> actual_shape{actual.shape, static_cast<size_t>(actual.rank)};
     std::span<const int32_t> expected_shape{expected.shape, static_cast<size_t>(expected.rank)};
     throw std::runtime_error(std::format(
-        "{} received invalid {} shape, expected {:n}, received {:n}",
-        operation, name, expected_shape, actual_shape));
+        "{} received invalid {} shape, expected {}, received {}",
+        operation, name, shapeText(expected_shape), shapeText(actual_shape)));
 }
 
 void validate_forward(

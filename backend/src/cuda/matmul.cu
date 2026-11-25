@@ -95,14 +95,14 @@ void check_nonnegative(const View& v) {
 void throw_incompatible(const View& a, const View& b) {
     std::span<const int32_t> aview{a.shape, static_cast<size_t>(a.rank)};
     std::span<const int32_t> bview{b.shape, static_cast<size_t>(b.rank)};
-    throw std::runtime_error(std::format("Incompatible shapes for matrix mul, a: {:n}, b: {:n}", aview, bview));
+    throw std::runtime_error(std::format("Incompatible shapes for matrix mul, a: {}, b: {}", shapeText(aview), shapeText(bview)));
 }
 
 void throw_incompatible(const View& out, const View& a, const View& b) {
     std::span<const int32_t> oview{out.shape, static_cast<size_t>(out.rank)};
     std::span<const int32_t> aview{a.shape, static_cast<size_t>(a.rank)};
     std::span<const int32_t> bview{b.shape, static_cast<size_t>(b.rank)};
-    throw std::runtime_error(std::format("Incompatible shapes for matrix mul, out: {:n}, a: {:n}, b: {:n}", oview, aview, bview));
+    throw std::runtime_error(std::format("Incompatible shapes for matrix mul, out: {}, a: {}, b: {}", shapeText(oview), shapeText(aview), shapeText(bview)));
 }
 
 bool out_matches(const View& out, const View& a, int32_t n) {

@@ -5,6 +5,8 @@
 #include <cmath>
 #include <algorithm>
 #include <climits>
+#include <span>
+#include <string>
 
 namespace tsgrad::cuda{
 
@@ -76,6 +78,15 @@ __host__ __device__ inline bool is_contiguous(const View& a){
     }
 
     return true;
+}
+
+inline std::string shapeText(std::span<const int32_t> shape){
+    std::string text;
+    for (size_t i = 0; i < shape.size(); i++){
+        if (i != 0) text += ", ";
+        text += std::to_string(shape[i]);
+    }
+    return text;
 }
 
 __host__ __device__ inline bool shapesAreEqual(const int32_t* a, const int32_t* b, int32_t a_rank, int32_t b_rank){

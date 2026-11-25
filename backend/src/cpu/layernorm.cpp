@@ -23,8 +23,8 @@ void require_same_shape(const View& a, const View& b, const char* operation, con
     std::span<const int32_t> a_shape{a.shape, static_cast<size_t>(a.rank)};
     std::span<const int32_t> b_shape{b.shape, static_cast<size_t>(b.rank)};
     throw std::runtime_error(std::format(
-        "{} received {} and {} with different shapes, received {}: {:n}, {}: {:n}",
-        operation, a_name, b_name, a_name, a_shape, b_name, b_shape));
+        "{} received {} and {} with different shapes, received {}: {}, {}: {}",
+        operation, a_name, b_name, a_name, shapeText(a_shape), b_name, shapeText(b_shape)));
 }
 
 std::pair<long long, long long> validate_common(

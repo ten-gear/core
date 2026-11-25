@@ -31,7 +31,7 @@ void matmul(const View& out, const View& a, const View& b) {
             std::span<const int32_t> aview{a.shape, static_cast<size_t>(a.rank)};
             std::span<const int32_t> bview{b.shape, static_cast<size_t>(b.rank)};
 
-            throw std::runtime_error(std::format("Incompatible shapes for matrix mul, a: {:n}, b: {:n}", aview,  bview ));
+            throw std::runtime_error(std::format("Incompatible shapes for matrix mul, a: {}, b: {}", shapeText(aview), shapeText(bview)));
         }
 
         const int32_t rank = a.rank;

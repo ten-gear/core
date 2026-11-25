@@ -8,7 +8,7 @@ namespace tsgrad{
     void scatter(const View& out, const View& indicies, const View& grad, const int32_t dim){
         if (dim < 0 || dim >= grad.rank){
             std::span<const int32_t> gradview{grad.shape, static_cast<size_t>(grad.rank)};
-            throw std::runtime_error(std::format("scatter received dim outside dimensions of grad, received dim: {} and grad.shape: {:n}", dim,  gradview));
+            throw std::runtime_error(std::format("scatter received dim outside dimensions of grad, received dim: {} and grad.shape: {}", dim, shapeText(gradview)));
         }
     
         if (indicies.rank != out.rank || indicies.rank != grad.rank) throw std::runtime_error(std::format("indicies, out, and grad have differing ranks inside scatter, received indicies.rank: {}, out.rank: {}, and grad.rank: {}", indicies.rank, out.rank, grad.rank));
@@ -17,7 +17,7 @@ namespace tsgrad{
                 if (indicies.shape[i] < 0 || indicies.shape[i] > out.shape[i]){
                     std::span<const int32_t> indiciesview{indicies.shape, static_cast<size_t>(indicies.rank)};
                     std::span<const int32_t> outview{out.shape, static_cast<size_t>(out.rank)};
-                    throw std::runtime_error(std::format("scatter received incompatible shapes for indicies and out, received indicies.shape: {:n}, out.shape: {:n}", indiciesview, outview));
+                    throw std::runtime_error(std::format("scatter received incompatible shapes for indicies and out, received indicies.shape: {}, out.shape: {}", shapeText(indiciesview), shapeText(outview)));
                 }
             }
         }

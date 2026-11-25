@@ -8,7 +8,7 @@ namespace tsgrad{
 void gather(const View& out, const View& indicies, const View& values, const int32_t dim){
     if (dim < 0 || dim >= out.rank){
         std::span<const int32_t> outview{out.shape, static_cast<size_t>(out.rank)};
-        throw std::runtime_error(std::format("gather received dim outside dimensions of out, received dim: {} and out.shape: {:n}", dim,  outview));
+        throw std::runtime_error(std::format("gather received dim outside dimensions of out, received dim: {} and out.shape: {}", dim, shapeText(outview)));
     }
 
     if (indicies.rank != values.rank) throw std::runtime_error(std::format("indicies, and values have differing ranks inside gather, received indicies.rank: {}, and values.rank: {}", indicies.rank, values.rank));
@@ -17,7 +17,7 @@ void gather(const View& out, const View& indicies, const View& values, const int
             if (indicies.shape[i] < 0 || indicies.shape[i] > values.shape[i]){
                 std::span<const int32_t> indiciesview{indicies.shape, static_cast<size_t>(indicies.rank)};
                 std::span<const int32_t> valuesview{values.shape, static_cast<size_t>(values.rank)};
-                throw std::runtime_error(std::format("gather received incompatible shapes for indicies and values, received indicies.shape: {:n}, values.shape: {:n}", indiciesview, valuesview));
+                throw std::runtime_error(std::format("gather received incompatible shapes for indicies and values, received indicies.shape: {}, values.shape: {}", shapeText(indiciesview), shapeText(valuesview)));
             }
         }
     }

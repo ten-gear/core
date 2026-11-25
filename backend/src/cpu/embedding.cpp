@@ -16,14 +16,14 @@ void embedding(const View& out, const View& indicies, const View& table, const i
         if (indicies.shape[i] != out.shape[i]){
             std::span<const int32_t> indiciesview{indicies.shape, static_cast<size_t>(indicies.rank)};
             std::span<const int32_t> outview{out.shape, static_cast<size_t>(out.rank)};
-            throw std::runtime_error(std::format("embedding received indicies/out with bad shapes, received indicies.shape: {:n}, out.shape: {:n}", indiciesview, outview));
+            throw std::runtime_error(std::format("embedding received indicies/out with bad shapes, received indicies.shape: {}, out.shape: {}", shapeText(indiciesview), shapeText(outview)));
         }
     }
 
     if (table.shape[1] != features || out.shape[out.rank - 1] != features){
         std::span<const int32_t> tableview{table.shape, static_cast<size_t>(table.rank)};
         std::span<const int32_t> outview{out.shape, static_cast<size_t>(out.rank)};
-        throw std::runtime_error(std::format("embedding received out with bad shape, received out.shape: {:n}, table.shape: {:n}, features: {}", outview, tableview, features));
+        throw std::runtime_error(std::format("embedding received out with bad shape, received out.shape: {}, table.shape: {}, features: {}", shapeText(outview), shapeText(tableview), features));
     }
 
     if constexpr (TSGRAD_HAS_CUDA){
@@ -70,14 +70,14 @@ void embedding_backward(const View& table, const View& indicies, const View& gra
         if (indicies.shape[i] != grad.shape[i]){
             std::span<const int32_t> indiciesview{indicies.shape, static_cast<size_t>(indicies.rank)};
             std::span<const int32_t> gradview{grad.shape, static_cast<size_t>(grad.rank)};
-            throw std::runtime_error(std::format("embedding_backward received indicies/grad with bad shapes, received indicies.shape: {:n}, grad.shape: {:n}", indiciesview, gradview));
+            throw std::runtime_error(std::format("embedding_backward received indicies/grad with bad shapes, received indicies.shape: {}, grad.shape: {}", shapeText(indiciesview), shapeText(gradview)));
         }
     }
 
     if (table.shape[1] != features || grad.shape[grad.rank - 1] != features){
         std::span<const int32_t> tableview{table.shape, static_cast<size_t>(table.rank)};
         std::span<const int32_t> gradview{grad.shape, static_cast<size_t>(grad.rank)};
-        throw std::runtime_error(std::format("embedding_backward received grad with bad shape, received grad.shape: {:n}, table.shape: {:n}, features: {}", gradview, tableview, features));
+        throw std::runtime_error(std::format("embedding_backward received grad with bad shape, received grad.shape: {}, table.shape: {}, features: {}", shapeText(gradview), shapeText(tableview), features));
     }
 
     if constexpr (TSGRAD_HAS_CUDA){
