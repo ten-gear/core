@@ -972,7 +972,20 @@ export class WebGpuBackend implements DeviceBackend {
     }
 }
 
+// Dawn accepts the Microsoft Basic Render Driver on headless Windows, then aborts
+// the process on the first compute dispatch. vitest cant handle this.
+function crashesOnCompute(adapter: GPUAdapter): boolean {
+    const info = (adapter as GPUAdapter & {
+        info?: { isFallbackAdapter?: boolean; vendor?: string; architecture?: string; device?: string; description?: string };
+    }).info;
+    if (!info) return false;
+    if (info.isFallbackAdapter) return true;
+    const label = [info.vendor, info.architecture, info.device, info.description].join(' ');
+    return /basic render driver|swiftshader|llvmpipe|lavapipe/i.test(label);
+}
+
 export async function tryCreateWebGpuBackend(): Promise<WebGpuBackend | null> {
+    if (typeof process !== 'undefined' && process.env?.TSGRAD_DISABLE_WEBGPU) return null;
     let gpu: { requestAdapter(): Promise<GPUAdapter | null> } | undefined;
     const browserGpu = (globalThis.navigator as Navigator & { gpu?: typeof gpu } | undefined)?.gpu;
     if (browserGpu) {
@@ -990,6 +1003,6 @@ export async function tryCreateWebGpuBackend(): Promise<WebGpuBackend | null> {
     }
     if (!gpu) return null;
     const adapter = await gpu.requestAdapter();
-    if (!adapter) return null;
+    if (!adapter || crashesOnCompute(adapter)) return null;
     return new WebGpuBackend(await adapter.requestDevice());
 }
