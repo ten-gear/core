@@ -10,7 +10,7 @@ Inspired by [@srush_nlp](https://x.com/srush_nlp)'s [minitorch](https://github.c
 npm install tengear
 ```
 
-`tengear` ships the compiled library, TypeScript declarations, the pure TypeScript CPU backend, and the WebGPU backend. npm also installs the optional native addon whose `os` and `cpu` match the machine. Windows x64 and Linux x64 install two addons, CPU and CUDA 12, because both declare the same platform. The loader uses the CUDA addon when `cudaGetDeviceCount` reports a device, and otherwise uses the CPU addon. The CUDA package bundles the CUDA runtime, so a user needs an NVIDIA driver and does not need the CUDA toolkit.
+`tengear` ships the compiled library, TypeScript declarations, the pure TypeScript CPU backend, and the WebGPU backend. npm also installs the optional native addon whose `os` and `cpu` match the machine. Windows x64 and Linux x64 install two addons, CPU and CUDA 12, because both declare the same platform. The loader uses the CUDA addon when `cudaGetDeviceCount` reports a device, and otherwise uses the CPU addon. The CUDA package bundles the CUDA runtime and leaves cuBLAS to the machine. A CUDA user needs an NVIDIA driver and CUDA 12 libraries on the loader path: `libcublas.so.12` and `libcublasLt.so.12` on Linux, `cublas64_12.dll` and `cublasLt64_12.dll` on Windows. The toolkit or the cuBLAS redistributable provides them. Without those libraries the CUDA addon fails to load and the CPU addon is used.
 
 Alpine and other platforms without a published addon still install. `auto` continues to WebGPU, then the TypeScript CPU backend.
 

@@ -7,7 +7,7 @@
   "cpu": ["x64"],
   "libc": ["glibc"],
   "main": "tsgrad_native.node",
-  "files": ["tsgrad_native.node", "*.so", "*.so.*", "LICENSE"],
+  "files": ["tsgrad_native.node", "*.so", "*.so.*", "!libcublas*.so*", "LICENSE"],
   "publishConfig": { "access": "public" },
   "repository": {
     "type": "git",

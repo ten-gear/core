@@ -1,9 +1,12 @@
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs';
 import { basename, delimiter, join, resolve } from 'node:path';
 
-const LINUX_VENDOR = /^(libcudart|libcublas|libcublasLt|libnvJitLink|libnvrtc|libnvToolsExt)\.so/;
+const LINUX_VENDOR = /^(libcudart|libnvJitLink|libnvrtc|libnvToolsExt)\.so/;
 const LINUX_SYSTEM = /^(libc|libm|libdl|librt|libpthread|libgcc_s|libstdc\+\+|ld-linux(?:-[a-z0-9_]+)?|libgomp|linux-vdso)\.so/;
+// cuBLAS is hundreds of MB. The CUDA toolkit on the machine provides it.
+const CUDA_HOST = /^(libcublas|libcublasLt)\.so/;
+const WINDOWS_CUDA_HOST = /^(cublas64_\d+|cublasLt64_\d+)\.dll$/i;
 const WINDOWS_SYSTEM = /^(kernel32|kernelbase|user32|advapi32|shell32|ole32|oleaut32|ws2_32|bcrypt|ntdll|dbghelp|psapi|shlwapi|gdi32|rpcrt4|combase|sechost|msvcrt|ucrtbase|vcruntime\d+(?:_\d+)?|msvcp\d+|concrt\d+|api-ms-win-.+)\.dll$/i;
 
 const sourceArg = process.argv[2];
@@ -24,6 +27,7 @@ if (!existsSync(nodeFile)) {
 }
 
 mkdirSync(dest, { recursive: true });
+if (cuda) omitCudaHostLibs(dest);
 const shipped = join(dest, 'tsgrad_native.node');
 copyFileSync(nodeFile, shipped);
 
@@ -48,6 +52,14 @@ function copyRuntime(source, directory, name = basename(source)) {
     return target;
 }
 
+function omitCudaHostLibs(directory) {
+    for (const name of readdirSync(directory)) {
+        if (!CUDA_HOST.test(name) && !WINDOWS_CUDA_HOST.test(name)) continue;
+        unlinkSync(join(directory, name));
+        console.log(`omitted ${name}`);
+    }
+}
+
 function bundleWindows(binary, directory) {
     const dumpbin = findDumpbin();
     const dirs = windowsSearchDirs();
@@ -60,6 +72,11 @@ function bundleWindows(binary, directory) {
         seen.add(key);
         const output = run(dumpbin, ['/nologo', '/dependents', file]);
         for (const name of windowsDependents(output)) {
+            if (WINDOWS_CUDA_HOST.test(name)) {
+                if (!findFile(name, dirs)) throw new Error(`${name} was not found. The CUDA toolkit provides it, and this package does not ship it.`);
+                console.log(`omitted ${name}`);
+                continue;
+            }
             if (WINDOWS_SYSTEM.test(name) || seen.has(name.toLowerCase())) continue;
             const found = findFile(name, dirs);
             if (!found) throw new Error(`${name} is required by ${basename(file)} and was not found beside LLVM or the CUDA toolkit`);
@@ -105,16 +122,31 @@ function findFile(name, dirs) {
 
 function bundleLinux(binary, directory, shipCuda) {
     const search = shipCuda ? cudaLibDirs() : [];
-    for (const entry of ldd(binary, search.join(':'))) {
-        if (entry.loader) continue;
-        const vendor = LINUX_VENDOR.test(entry.name);
-        if (!vendor && LINUX_SYSTEM.test(entry.name) && entry.path && isSystemLinux(entry.path)) continue;
-        const source = entry.path && existsSync(entry.path) ? entry.path : findFile(entry.name, search);
-        if (!source) throw new Error(`${entry.name} resolves to ${entry.path ?? 'not found'} and was not bundled`);
-        if (!vendor && isSystemLinux(source)) continue;
-        copyRuntime(source, directory, entry.name);
+    const extra = search.join(':');
+    const pending = [binary];
+    const seen = new Set();
+    while (pending.length) {
+        const file = pending.pop();
+        const key = basename(file);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        // Only libraries this file loads itself. cuBLAS's own dependencies stay with the toolkit.
+        const needed = new Set(directNeeded(file));
+        for (const entry of ldd(file, extra)) {
+            if (entry.loader || !needed.has(entry.name) || seen.has(entry.name)) continue;
+            if (CUDA_HOST.test(entry.name)) {
+                console.log(`omitted ${entry.name}`);
+                continue;
+            }
+            const vendor = LINUX_VENDOR.test(entry.name);
+            if (!vendor && LINUX_SYSTEM.test(entry.name) && entry.path && isSystemLinux(entry.path)) continue;
+            const source = entry.path && existsSync(entry.path) ? entry.path : findFile(entry.name, search);
+            if (!source) throw new Error(`${entry.name} resolves to ${entry.path ?? 'not found'} and was not bundled`);
+            if (!vendor && isSystemLinux(source)) continue;
+            pending.push(copyRuntime(source, directory, entry.name));
+        }
     }
-    assertLinux(join(directory, basename(binary)), directory);
+    assertLinux(join(directory, basename(binary)), directory, shipCuda);
 }
 
 function ldd(binary, extraPath) {
@@ -142,6 +174,11 @@ function parseLdd(text) {
     return entries;
 }
 
+function directNeeded(binary) {
+    const text = run('readelf', ['-d', binary]);
+    return [...text.matchAll(/\(NEEDED\).*\[([^\]]*)\]/g)].map((match) => match[1]);
+}
+
 function isSystemLinux(path) {
     return path.startsWith('/lib/') || path.startsWith('/lib64/') || path.startsWith('/usr/lib/') || path.startsWith('/usr/lib64/');
 }
@@ -155,14 +192,33 @@ function cudaLibDirs() {
     return dirs.filter((dir) => existsSync(dir));
 }
 
-function assertLinux(binary, directory) {
-    const env = { ...process.env, LD_LIBRARY_PATH: directory };
-    for (const entry of parseLdd(run('ldd', [binary], env))) {
-        if (entry.loader) continue;
-        if (!entry.path) throw new Error(`${entry.name} was not found next to ${basename(binary)}`);
-        if (entry.path.startsWith(directory)) continue;
-        if (isSystemLinux(entry.path) && !LINUX_VENDOR.test(entry.name)) continue;
-        throw new Error(`${entry.name} resolves to ${entry.path}. Bundle it beside the addon.`);
+function assertLinux(binary, directory, shipCuda) {
+    const libraryPath = [directory];
+    if (shipCuda) libraryPath.push(...cudaLibDirs());
+    if (process.env.LD_LIBRARY_PATH) libraryPath.push(process.env.LD_LIBRARY_PATH);
+    const env = { ...process.env, LD_LIBRARY_PATH: libraryPath.join(':') };
+    const pending = [binary];
+    const seen = new Set();
+    while (pending.length) {
+        const file = pending.pop();
+        const key = basename(file);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const needed = new Set(directNeeded(file));
+        for (const entry of parseLdd(run('ldd', [file], env))) {
+            if (entry.loader || !needed.has(entry.name)) continue;
+            if (CUDA_HOST.test(entry.name)) {
+                if (!entry.path) throw new Error(`${entry.name} was not found. The CUDA toolkit provides it, and this package does not ship it.`);
+                continue;
+            }
+            if (!entry.path) throw new Error(`${entry.name} was not found next to ${basename(binary)}`);
+            if (entry.path.startsWith(directory)) {
+                pending.push(entry.path);
+                continue;
+            }
+            if (isSystemLinux(entry.path) && !LINUX_VENDOR.test(entry.name)) continue;
+            throw new Error(`${entry.name} resolves to ${entry.path}. Bundle it beside the addon.`);
+        }
     }
 }
 

@@ -6,7 +6,7 @@
   "os": ["win32"],
   "cpu": ["x64"],
   "main": "tsgrad_native.node",
-  "files": ["tsgrad_native.node", "*.dll", "LICENSE"],
+  "files": ["tsgrad_native.node", "*.dll", "!cublas64_*.dll", "!cublasLt64_*.dll", "LICENSE"],
   "publishConfig": { "access": "public" },
   "repository": {
     "type": "git",
