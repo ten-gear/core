@@ -26,6 +26,11 @@ if [[ -n "${CMAKE_OSX_ARCHITECTURES:-}" ]]; then
     args+=("-DCMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES}")
 fi
 
+if [[ "${OS:-}" == "Windows_NT" ]]; then
+    export MSYS2_ARG_CONV_EXCL='*'
+    args+=(-G "Visual Studio 17 2022" -A x64)
+fi
+
 if [[ "$(uname -s)" == "Darwin" && -n "${OpenMP_ROOT:-}" ]]; then
     args+=(
         "-DOpenMP_ROOT=${OpenMP_ROOT}"
