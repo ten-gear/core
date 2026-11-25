@@ -6,6 +6,12 @@ mode="${2:?usage: build-native.sh <suffix> <cpu|cuda>}"
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 
+# Git Bash pwd is /d/a/...; MSYS2_ARG_CONV_EXCL blocks the rewrite cmake.exe needs.
+if [[ "${OS:-}" == "Windows_NT" ]]; then
+    root="$(cygpath -m "$root")"
+    export MSYS2_ARG_CONV_EXCL='*'
+fi
+
 build_dir="$root/backend/build"
 args=(-S "$root/backend" -B "$build_dir" -DCMAKE_BUILD_TYPE=Release)
 
@@ -27,7 +33,6 @@ if [[ -n "${CMAKE_OSX_ARCHITECTURES:-}" ]]; then
 fi
 
 if [[ "${OS:-}" == "Windows_NT" ]]; then
-    export MSYS2_ARG_CONV_EXCL='*'
     args+=(-G "Visual Studio 17 2022" -A x64)
 fi
 
