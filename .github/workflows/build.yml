@@ -22,9 +22,9 @@ jobs:
           - os: ubuntu-latest
             suffix: linux-arm64-gnu
             cross: aarch64-linux-gnu
-          - os: macos-14
+          - os: macos-15
             suffix: darwin-arm64
-          - os: macos-14
+          - os: macos-15
             suffix: darwin-x64
             osx_arch: x86_64
     runs-on: ${{ matrix.os }}
@@ -177,7 +177,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-15
             suffix: darwin-arm64
             artifact: native-darwin-arm64
           - os: ubuntu-latest
