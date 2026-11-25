@@ -47,7 +47,9 @@ std::pair<long long, long long> dimensions(const View& input, int32_t dim, const
 template <bool Log>
 void softmax_forward(const View& out, const View& input, int32_t dim, const char* operation) {
     require_same_shape(out, input, operation, "out.shape", "input.shape");
-    const auto [rows, dim_size] = dimensions(input, dim, operation);
+    const auto shape = dimensions(input, dim, operation);
+    const long long rows = shape.first;
+    const long long dim_size = shape.second;
 
     if constexpr (TSGRAD_HAS_CUDA) {
         if constexpr (Log)
@@ -90,7 +92,9 @@ void softmax_backward_impl(
 ) {
     require_same_shape(grad_in, out, operation, "grad_in.shape", "out.shape");
     require_same_shape(grad_out, out, operation, "grad_out.shape", "out.shape");
-    const auto [rows, dim_size] = dimensions(out, dim, operation);
+    const auto shape = dimensions(out, dim, operation);
+    const long long rows = shape.first;
+    const long long dim_size = shape.second;
 
     if constexpr (TSGRAD_HAS_CUDA) {
         if constexpr (Log)

@@ -56,7 +56,9 @@ void layernorm(
     const View& mean, const View& inv_std, const float epsilon
 ) {
     require_same_shape(out, in, "layernorm", "out.shape", "in.shape");
-    const auto [rows, features] = validate_common(in, gamma, mean, inv_std, "layernorm");
+    const auto shape = validate_common(in, gamma, mean, inv_std, "layernorm");
+    const long long rows = shape.first;
+    const long long features = shape.second;
     if (beta.rank != 1 || beta.shape[0] != features)
         throw std::runtime_error("layernorm beta shape mismatch");
     if (!std::isfinite(epsilon) || epsilon < 0.0f)
@@ -107,7 +109,9 @@ void layernorm_backward(
 ) {
     require_same_shape(grad_in, in, "layernorm_backward", "grad_in.shape", "in.shape");
     require_same_shape(grad_out, in, "layernorm_backward", "grad_out.shape", "in.shape");
-    const auto [rows, features] = validate_common(in, gamma, mean, inv_std, "layernorm_backward");
+    const auto shape = validate_common(in, gamma, mean, inv_std, "layernorm_backward");
+    const long long rows = shape.first;
+    const long long features = shape.second;
     if (grad_gamma.rank != 1 || grad_gamma.shape[0] != features ||
         grad_beta.rank != 1 || grad_beta.shape[0] != features)
         throw std::runtime_error("layernorm_backward parameter-gradient shape mismatch");
