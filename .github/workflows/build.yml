@@ -65,11 +65,27 @@ jobs:
           echo "CXX=$(brew --prefix llvm)/bin/clang++" >> "$GITHUB_ENV"
           if [[ "${{ matrix.osx_arch }}" == "x86_64" ]]; then
             softwareupdate --install-rosetta --agree-to-license || true
-            if [[ ! -x /usr/local/bin/brew ]]; then
-              NONINTERACTIVE=1 arch -x86_64 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-            fi
-            arch -x86_64 /usr/local/bin/brew install libomp
-            echo "OpenMP_ROOT=/usr/local/opt/libomp" >> "$GITHUB_ENV"
+            # Homebrew 7 will not install an Intel prefix on Apple Silicon, and
+            # libomp bottles are arm64-only. Cross-compile the runtime instead.
+            archive="${RUNNER_TEMP}/llvm-project-23.1.6.src.tar.xz"
+            curl -fsSL -o "$archive" \
+              https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.6/llvm-project-23.1.6.src.tar.xz
+            echo "d3b86ab29cfb4445a6652e5c2642ccc75e04e38084dde3701d323320f35a31da  $archive" | shasum -a 256 -c -
+            tar -xJf "$archive" -C "$RUNNER_TEMP"
+            prefix="${RUNNER_TEMP}/libomp-x64"
+            cmake -S "${RUNNER_TEMP}/llvm-project-23.1.6.src/runtimes" -B "${RUNNER_TEMP}/libomp-x64-build" \
+              -DLLVM_ENABLE_RUNTIMES=openmp \
+              -DLIBOMP_INSTALL_ALIASES=OFF \
+              -DOPENMP_ENABLE_OMPT_TOOLS=OFF \
+              -DLLVM_INCLUDE_TESTS=OFF \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_INSTALL_PREFIX="$prefix" \
+              -DCMAKE_OSX_ARCHITECTURES=x86_64
+            cmake --build "${RUNNER_TEMP}/libomp-x64-build" --parallel
+            cmake --install "${RUNNER_TEMP}/libomp-x64-build"
+            test -f "$prefix/lib/libomp.dylib"
+            test -f "$prefix/include/omp.h"
+            echo "OpenMP_ROOT=$prefix" >> "$GITHUB_ENV"
           else
             echo "OpenMP_ROOT=$(brew --prefix libomp)" >> "$GITHUB_ENV"
           fi
