@@ -15,7 +15,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
+          - os: windows-2022
             suffix: win32-x64
           - os: ubuntu-latest
             suffix: linux-x64-gnu
@@ -125,7 +125,7 @@ jobs:
           if-no-files-found: error
 
   build-cuda-windows:
-    runs-on: windows-latest
+    runs-on: windows-2022
     name: Build win32-x64-cuda12
     steps:
       - uses: actions/checkout@v4
