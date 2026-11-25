@@ -1,0 +1,17 @@
+{
+  "name": "@tsgrad/core-linux-x64-gnu",
+  "version": "0.0.0",
+  "description": "Prebuilt native CPU addon for @tsgrad/core on Linux x64 (glibc).",
+  "license": "MIT",
+  "os": ["linux"],
+  "cpu": ["x64"],
+  "libc": ["glibc"],
+  "main": "tsgrad_native.node",
+  "files": ["tsgrad_native.node", "*.so", "*.so.*", "LICENSE"],
+  "publishConfig": { "access": "public" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tsgrad/core.git",
+    "directory": "npm/linux-x64-gnu"
+  }
+}

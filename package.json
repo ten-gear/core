@@ -1,11 +1,31 @@
 {
-  "name": "framework",
-  "version": "1.0.0",
+  "name": "@tsgrad/core",
+  "version": "0.0.0",
+  "description": "TypeScript tensor library with a native CPU addon, optional CUDA, and WebGPU.",
   "type": "module",
-  "main": "index.js",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "tsc",
+    "build:demo": "vite build",
     "typecheck": "tsc --noEmit",
     "benchmark:backend": "tsx project/benchmark_backend.ts",
     "prepare:tinystories": "tsx project/prepare_tinystories.ts",
@@ -15,32 +35,43 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/tsgrad/framework.git"
+    "url": "git+https://github.com/tsgrad/core.git"
   },
-  "keywords": [],
+  "keywords": [
+    "tensors",
+    "autograd",
+    "webgpu",
+    "cuda"
+  ],
   "author": "",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/tsgrad/framework/issues"
+    "url": "https://github.com/tsgrad/core/issues"
   },
-  "homepage": "https://github.com/tsgrad/framework#readme",
-  "description": "",
+  "homepage": "https://github.com/tsgrad/core#readme",
   "devDependencies": {
     "@types/node": "^26.6.5",
     "@types/plotly.js": "^3.0.13",
     "gif.js": "^0.2.0",
     "node-addon-api": "^8.9.2",
     "node-api-headers": "^1.9.0",
+    "plotly.js": "^4.0.0",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
+    "vite": "^8.2.2",
     "vitest": "^4.1.11"
   },
   "dependencies": {
-    "js-tiktoken": "^1.0.21",
-    "plotly.js": "^4.0.0",
-    "vite": "^8.2.2"
+    "js-tiktoken": "^1.0.21"
   },
   "optionalDependencies": {
+    "@tsgrad/core-darwin-arm64": "0.0.0",
+    "@tsgrad/core-darwin-x64": "0.0.0",
+    "@tsgrad/core-linux-arm64-gnu": "0.0.0",
+    "@tsgrad/core-linux-x64-gnu": "0.0.0",
+    "@tsgrad/core-linux-x64-gnu-cuda12": "0.0.0",
+    "@tsgrad/core-win32-x64": "0.0.0",
+    "@tsgrad/core-win32-x64-cuda12": "0.0.0",
     "webgpu": "^0.6.2"
   }
 }

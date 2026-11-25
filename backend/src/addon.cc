@@ -3,6 +3,10 @@
 
 #include <napi.h>
 
+#if TSGRAD_HAS_CUDA
+#include <cuda_runtime.h>
+#endif
+
 #include <cstdint>
 #include <exception>
 #include <memory>
@@ -113,9 +117,13 @@ Napi::Value Synchronize(const Napi::CallbackInfo& info) {
 Napi::Value BackendInfo(const Napi::CallbackInfo& info) {
     Napi::Object result = Napi::Object::New(info.Env());
 #if TSGRAD_HAS_CUDA
+    int count = 0;
+    const cudaError_t err = cudaGetDeviceCount(&count);
     result.Set("kind", "cuda");
+    result.Set("available", err == cudaSuccess && count > 0);
 #else
     result.Set("kind", "cpu");
+    result.Set("available", true);
 #endif
     return result;
 }

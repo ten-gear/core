@@ -1,0 +1,16 @@
+{
+  "name": "@tsgrad/core-darwin-arm64",
+  "version": "0.0.0",
+  "description": "Prebuilt native CPU addon for @tsgrad/core on macOS arm64.",
+  "license": "MIT",
+  "os": ["darwin"],
+  "cpu": ["arm64"],
+  "main": "tsgrad_native.node",
+  "files": ["tsgrad_native.node", "*.dylib", "LICENSE"],
+  "publishConfig": { "access": "public" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tsgrad/core.git",
+    "directory": "npm/darwin-arm64"
+  }
+}

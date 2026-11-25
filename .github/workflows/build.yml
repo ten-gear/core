@@ -1,0 +1,218 @@
+name: Build native binaries
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            suffix: win32-x64
+          - os: ubuntu-latest
+            suffix: linux-x64-gnu
+          - os: ubuntu-latest
+            suffix: linux-arm64-gnu
+            cross: aarch64-linux-gnu
+          - os: macos-14
+            suffix: darwin-arm64
+          - os: macos-14
+            suffix: darwin-x64
+            osx_arch: x86_64
+    runs-on: ${{ matrix.os }}
+    name: Build ${{ matrix.suffix }}
+    env:
+      CROSS: ${{ matrix.cross }}
+      CMAKE_OSX_ARCHITECTURES: ${{ matrix.osx_arch }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install CMake
+        uses: lukka/get-cmake@latest
+        with:
+          cmakeVersion: 3.31.6
+
+      - name: Install Linux toolchain
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++-14
+          if [[ -n "${{ matrix.cross }}" ]]; then
+            sudo apt-get install -y gcc-14-aarch64-linux-gnu g++-14-aarch64-linux-gnu
+          fi
+          echo "CC=gcc-14" >> "$GITHUB_ENV"
+          echo "CXX=g++-14" >> "$GITHUB_ENV"
+
+      - name: Install macOS toolchain
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          brew install cmake libomp llvm
+          echo "CC=$(brew --prefix llvm)/bin/clang" >> "$GITHUB_ENV"
+          echo "CXX=$(brew --prefix llvm)/bin/clang++" >> "$GITHUB_ENV"
+          if [[ "${{ matrix.osx_arch }}" == "x86_64" ]]; then
+            softwareupdate --install-rosetta --agree-to-license || true
+            if [[ ! -x /usr/local/bin/brew ]]; then
+              NONINTERACTIVE=1 arch -x86_64 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+            fi
+            arch -x86_64 /usr/local/bin/brew install libomp
+            echo "OpenMP_ROOT=/usr/local/opt/libomp" >> "$GITHUB_ENV"
+          else
+            echo "OpenMP_ROOT=$(brew --prefix libomp)" >> "$GITHUB_ENV"
+          fi
+
+      - name: Install LLVM OpenMP
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $bin = "C:\Program Files\LLVM\bin"
+          if (-not (Test-Path "$bin\libomp.dll")) {
+            choco install llvm -y --no-progress
+          }
+          Add-Content $env:GITHUB_PATH $bin
+
+      - name: Install JavaScript dependencies
+        shell: bash
+        run: npm install --omit=optional
+
+      - name: Build native addon
+        shell: bash
+        run: bash scripts/build-native.sh ${{ matrix.suffix }} cpu
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.suffix }}
+          path: npm/${{ matrix.suffix }}/
+          if-no-files-found: error
+
+  build-cuda:
+    runs-on: ubuntu-latest
+    name: Build linux-x64-gnu-cuda12
+    container:
+      image: nvidia/cuda:12.8.1-devel-ubuntu24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools and build CUDA addon
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends curl ca-certificates build-essential pkg-config python3 g++-14 xz-utils
+          curl -fsSL -o /tmp/cmake.sh https://github.com/Kitware/CMake/releases/download/v3.31.6/cmake-3.31.6-linux-x86_64.sh
+          sh /tmp/cmake.sh --skip-license --prefix=/usr/local
+          curl -fsSL https://nodejs.org/dist/v22.14.0/node-v22.14.0-linux-x64.tar.gz | tar -xz -C /usr/local --strip-components=1
+          npm install --omit=optional
+          CC=gcc-14 CXX=g++-14 bash scripts/build-native.sh linux-x64-gnu-cuda12 cuda
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-linux-x64-gnu-cuda12
+          path: npm/linux-x64-gnu-cuda12/
+          if-no-files-found: error
+
+  build-cuda-windows:
+    runs-on: windows-latest
+    name: Build win32-x64-cuda12
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install CUDA Toolkit
+        uses: Jimver/cuda-toolkit@v0.2.35
+        with:
+          cuda: "12.6.3"
+          method: network
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install CMake
+        uses: lukka/get-cmake@latest
+        with:
+          cmakeVersion: 3.31.6
+
+      - name: Install LLVM OpenMP
+        shell: pwsh
+        run: |
+          $bin = "C:\Program Files\LLVM\bin"
+          if (-not (Test-Path "$bin\libomp.dll")) {
+            choco install llvm -y --no-progress
+          }
+          Add-Content $env:GITHUB_PATH $bin
+
+      - name: Install JavaScript dependencies
+        shell: bash
+        run: npm install --omit=optional
+
+      - name: Build CUDA addon
+        shell: bash
+        run: bash scripts/build-native.sh win32-x64-cuda12 cuda
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-win32-x64-cuda12
+          path: npm/win32-x64-cuda12/
+          if-no-files-found: error
+
+  test:
+    needs: build
+    if: ${{ !cancelled() }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            suffix: darwin-arm64
+            artifact: native-darwin-arm64
+          - os: ubuntu-latest
+            suffix: linux-x64-gnu
+            artifact: native-linux-x64-gnu
+          - os: windows-latest
+            suffix: win32-x64
+            artifact: native-win32-x64
+    runs-on: ${{ matrix.os }}
+    name: Test ${{ matrix.suffix }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Download binary
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: native-artifact
+
+      - name: Place addon where the loader looks
+        shell: bash
+        run: |
+          binary="$(find native-artifact -name tsgrad_native.node -print -quit)"
+          test -n "$binary"
+          mkdir -p backend/build/Release
+          find "$(dirname "$binary")" -maxdepth 1 -type f ! -name package.json -exec cp {} backend/build/Release/ \;
+          ls -lh backend/build/Release
+
+      - name: Install dependencies and run tests
+        shell: bash
+        run: |
+          npm install
+          npm test
