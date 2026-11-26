@@ -8,20 +8,23 @@ import { getBackendKind, initBackend } from "../src/backend/index.js";
 import { AdamW } from "../src/optim.js";
 import { destroyPool } from "../src/fast_ops.js";
 import * as layers from "../src/layers.ts"
-import { loadTokenFile, sampleBatch, tokenPath } from "./tinystories_data.js";
+import { checkpointDirectory, loadLatestCheckpoint, saveCheckpoint } from "./checkpoint.js";
 import { prepareTinyStories } from "./prepare_tinystories.js";
+import { loadTokenFile, Random, sampleBatch, tokenPath } from "./tinystories_data.js";
+
+const WEIGHT_STD = 0.02;
 
 export class TransformerBlock extends Layer {
     readonly norm1: layers.LayerNorm;
     readonly attn: layers.MHAFlashAttention;
     readonly norm2: layers.LayerNorm;
     readonly mlp: layers.MLP;
-    constructor(nEmbd: number, nHead: number, maxSeq: number, dropout = 0) {
+    constructor(nEmbd: number, nHead: number, maxSeq: number, init: layers.WeightInit, residual: layers.WeightInit, dropout = 0) {
         super();
         this.norm1 = new layers.LayerNorm(nEmbd)
-        this.attn = new layers.MHAFlashAttention(nEmbd, nHead, maxSeq, dropout)
+        this.attn = new layers.MHAFlashAttention(nEmbd, nHead, maxSeq, dropout, init, residual)
         this.norm2 = new layers.LayerNorm(nEmbd)
-        this.mlp = new layers.MLP(nEmbd)
+        this.mlp = new layers.MLP(nEmbd, 4, init, residual)
     }
     forward(input: Tensor, offset = 0): Tensor {
         const x = input.add(this.attn.forward(this.norm1.forward(input), offset));
@@ -37,15 +40,17 @@ export class GPT2 extends Model {
 
     constructor(vocab: number, nEmbd: number, nHead: number, nLayer: number, maxSeq: number) {
         super();
-        this.embed = new layers.Embedding(vocab, nEmbd)
+        const init = layers.normalParameter(WEIGHT_STD);
+        const residual = layers.normalParameter(WEIGHT_STD / Math.sqrt(2 * nLayer));
+        this.embed = new layers.Embedding(vocab, nEmbd, init)
         this.blocks = [];
         for (let i = 0; i < nLayer; i++) {
-            const block = new TransformerBlock(nEmbd, nHead, maxSeq);
+            const block = new TransformerBlock(nEmbd, nHead, maxSeq, init, residual);
             this.addModule(`block${i}`, block);
             this.blocks.push(block);
         }
         this.norm = new layers.LayerNorm(nEmbd)
-        this.head = new layers.Linear(nEmbd, vocab)
+        this.head = new layers.Linear(nEmbd, vocab, init)
     }
 
     forward(ids: Tensor): Tensor {
@@ -70,8 +75,32 @@ const BATCH_SIZE = 4;
 const LEARNING_RATE = 6e-4;
 const BETA1 = 0.9;
 const BETA2 = 0.95;
+const EPS = 1e-8;
 const WEIGHT_DECAY = 0.1;
 const VAL_EVERY = 50;
+const SAVE_CHECKPOINTS = true;
+const RESUME_CHECKPOINT = false;
+const CHECKPOINT_EVERY = 100;
+const SEED = 1337;
+
+const checkpointSpec = {
+    model: {
+        vocab: VOCAB,
+        nEmbd: N_EMBD,
+        nHead: N_HEAD,
+        nLayer: N_LAYER,
+        maxSeq: BLOCK_SIZE,
+    },
+    hyperparameters: {
+        learningRate: LEARNING_RATE,
+        beta1: BETA1,
+        beta2: BETA2,
+        eps: EPS,
+        weightDecay: WEIGHT_DECAY,
+        batchSize: BATCH_SIZE,
+        blockSize: BLOCK_SIZE,
+    },
+};
 
 function readSteps(): number {
     const raw = process.argv[2];
@@ -96,6 +125,8 @@ async function ensureTokens(): Promise<void> {
 
 async function train(): Promise<void> {
     const steps = readSteps();
+    if (SAVE_CHECKPOINTS && (!Number.isInteger(CHECKPOINT_EVERY) || CHECKPOINT_EVERY < 1))
+        throw new Error(`CHECKPOINT_EVERY must be a positive integer, received ${CHECKPOINT_EVERY}`);
     await ensureTokens();
     await initBackend({ backend: "auto" });
     console.log(`backend ${getBackendKind()}`);
@@ -105,20 +136,57 @@ async function train(): Promise<void> {
     console.log(`train tokens ${trainTokens.length.toLocaleString()}  valid tokens ${validTokens.length.toLocaleString()}`);
 
     const model = new GPT2(VOCAB, N_EMBD, N_HEAD, N_LAYER, BLOCK_SIZE);
-    const optim = new AdamW(model.parameters(), LEARNING_RATE, BETA1, BETA2, 1e-8, WEIGHT_DECAY);
+    const parameterCount = model.parameters().reduce((total, parameter) => {
+        const value = parameter.value;
+        return total + (value instanceof Tensor ? value.size() : 1);
+    }, 0);
+    console.log(`parameters ${parameterCount.toLocaleString()}`);
+    const optim = new AdamW(model.parameters(), LEARNING_RATE, BETA1, BETA2, EPS, WEIGHT_DECAY);
     for (const parameter of model.parameters()) {
         const value = parameter.value;
         if (value instanceof Tensor && value.grad === undefined)
             value.grad = Tensor.zeros(value.shape());
     }
+
+    const rng = new Random(SEED);
+    let startStep = 1;
+    let resumed = false;
+    if (RESUME_CHECKPOINT) {
+        const loaded = await loadLatestCheckpoint(checkpointDirectory, model, optim, checkpointSpec);
+        if (loaded !== null) {
+            rng.setState(loaded.rngState);
+            startStep = loaded.step + 1;
+            resumed = true;
+            console.log(`resumed from step ${loaded.step}`);
+        }
+    }
+    if (startStep > steps) {
+        console.log(`checkpoint step ${startStep - 1} is already at the ${steps} step target`);
+        return;
+    }
+
     model.train();
     console.log(`GPT-2  vocab ${VOCAB}  block ${BLOCK_SIZE}  batch ${BATCH_SIZE}  steps ${steps}`);
+    const writeCheckpoint = (step: number) => saveCheckpoint({
+        root: checkpointDirectory,
+        step,
+        seed: SEED,
+        rng,
+        model,
+        optim,
+        modelConfig: checkpointSpec.model,
+        hyperparameters: checkpointSpec.hyperparameters,
+    });
+    if (SAVE_CHECKPOINTS && !resumed) {
+        await writeCheckpoint(0);
+        console.log("checkpoint step 0");
+    }
 
     const started = performance.now();
-    for (let step = 1; step <= steps; step++) {
+    for (let step = startStep; step <= steps; step++) {
         const lossValue = await tensorScope(() => {
             optim.zeroGrad();
-            const batch = sampleBatch(trainTokens, BATCH_SIZE, BLOCK_SIZE);
+            const batch = sampleBatch(trainTokens, BATCH_SIZE, BLOCK_SIZE, rng);
             const logits = model.forward(idsToTensor(batch.input, BATCH_SIZE, BLOCK_SIZE));
             const loss = crossEntropy(logits, idsToTensor(batch.target, BATCH_SIZE, BLOCK_SIZE));
             loss.backward();
@@ -130,7 +198,7 @@ async function train(): Promise<void> {
         if (step % VAL_EVERY === 0) {
             model.eval();
             const val = await tensorScope(() => {
-                const batch = sampleBatch(validTokens, BATCH_SIZE, BLOCK_SIZE);
+                const batch = sampleBatch(validTokens, BATCH_SIZE, BLOCK_SIZE, rng);
                 const loss = crossEntropy(
                     model.forward(idsToTensor(batch.input, BATCH_SIZE, BLOCK_SIZE)),
                     idsToTensor(batch.target, BATCH_SIZE, BLOCK_SIZE),
@@ -139,6 +207,11 @@ async function train(): Promise<void> {
             });
             model.train();
             console.log(`step ${step}  val ${val.toFixed(4)}`);
+        }
+
+        if (SAVE_CHECKPOINTS && step % CHECKPOINT_EVERY === 0) {
+            await writeCheckpoint(step);
+            console.log(`checkpoint step ${step}`);
         }
     }
     const seconds = (performance.now() - started) / 1000;

@@ -39,6 +39,34 @@ export async function loadTokenFile(path: string): Promise<Uint16Array> {
     }
 }
 
+// mulberry32. The saved state is the uint32 used by the next draw.
+export class Random {
+    private state: number;
+
+    constructor(seed: number) {
+        if (!Number.isFinite(seed))
+            throw new Error("Random seed must be a finite number");
+        this.state = seed >>> 0;
+    }
+
+    next(): number {
+        this.state = (this.state + 0x6D2B79F5) >>> 0;
+        let t = Math.imul(this.state ^ (this.state >>> 15), 1 | this.state);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    }
+
+    getState(): number {
+        return this.state >>> 0;
+    }
+
+    setState(state: number): void {
+        if (!Number.isFinite(state))
+            throw new Error("Random state must be a finite number");
+        this.state = state >>> 0;
+    }
+}
+
 // One training row is blockSize + 1 consecutive ids:
 // input = ids[start : start + blockSize], target = ids[start + 1 : start + blockSize + 1].
 export function copyTokenWindow(
@@ -58,7 +86,7 @@ export function copyTokenWindow(
     }
 }
 
-export function sampleBatch(tokens: Uint16Array, batchSize: number, blockSize: number): TokenBatch {
+export function sampleBatch(tokens: Uint16Array, batchSize: number, blockSize: number, random: Random): TokenBatch {
     if (!Number.isInteger(batchSize) || batchSize < 1)
         throw new Error("batchSize must be a positive integer");
     if (!Number.isInteger(blockSize) || blockSize < 1)
@@ -70,7 +98,7 @@ export function sampleBatch(tokens: Uint16Array, batchSize: number, blockSize: n
     const input = new Float32Array(batchSize * blockSize);
     const target = new Float32Array(batchSize * blockSize);
     for (let row = 0; row < batchSize; row++) {
-        const start = Math.floor(Math.random() * (maxStart + 1));
+        const start = Math.floor(random.next() * (maxStart + 1));
         copyTokenWindow(tokens, start, blockSize, input, target, row);
     }
     return { input, target };

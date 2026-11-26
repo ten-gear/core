@@ -2,6 +2,7 @@ node_modules/
 dist/
 demo-dist/
 project/data/
+project/checkpoints/
 backend/build/
 npm/**/*.node
 npm/**/*.dll
