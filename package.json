@@ -31,7 +31,9 @@
     "prepare:tinystories": "tsx project/prepare_tinystories.ts",
     "prepare:fineweb-edu": "tsx project/prepare_fineweb_edu.ts",
     "prepare:smol-smoltalk": "tsx project/prepare_smol_smoltalk.ts",
-    "train:gpt2": "tsx project/train_gpt_2.ts",
+    "train:tinystories": "tsx project/train_tinystories.ts",
+    "train:fineweb-edu": "tsx project/train_fineweb_edu.ts",
+    "train:smol-smoltalk": "tsx project/train_smol_smoltalk.ts",
     "preview": "vite preview",
     "test": "vitest"
   },
