@@ -80,6 +80,8 @@ const N_LAYER = 12;
 const BLOCK_SIZE = 1024;
 const BATCH_SIZE = 4;
 const LEARNING_RATE = 6e-4;
+const WARMUP_STEPS = 100;
+const MIN_LEARNING_RATE = LEARNING_RATE / 10;
 const BETA1 = 0.9;
 const BETA2 = 0.95;
 const EPS = 1e-8;
@@ -89,7 +91,7 @@ const RESUME_CHECKPOINT = false;
 const CHECKPOINT_EVERY = 100;
 const MONITOR = true;
 const MONITOR_EVERY = 100;
-const HELLASWAG_MONITOR_EXAMPLES = 128;
+const HELLASWAG_MONITOR_EXAMPLES = 256;
 
 const checkpointSpec = {
     model: {
@@ -101,6 +103,8 @@ const checkpointSpec = {
     },
     hyperparameters: {
         learningRate: LEARNING_RATE,
+        warmupSteps: WARMUP_STEPS,
+        minLearningRate: MIN_LEARNING_RATE,
         beta1: BETA1,
         beta2: BETA2,
         eps: EPS,
@@ -117,6 +121,25 @@ export type Gpt2Dataset = {
     prepare: () => Promise<void>;
     tokenPath: (split: TokenSplit) => string;
 };
+
+export function learningRateAt(step: number, steps: number): number {
+    if (!Number.isInteger(step) || step < 0)
+        throw new Error(`learning-rate step must be a non-negative integer, received ${step}`);
+    if (!Number.isInteger(steps) || steps < 1)
+        throw new Error(`learning-rate horizon must be a positive integer, received ${steps}`);
+    if (!Number.isInteger(WARMUP_STEPS) || WARMUP_STEPS < 1)
+        throw new Error(`WARMUP_STEPS must be a positive integer, received ${WARMUP_STEPS}`);
+    if (!(MIN_LEARNING_RATE >= 0) || MIN_LEARNING_RATE > LEARNING_RATE)
+        throw new Error(`MIN_LEARNING_RATE must be between 0 and ${LEARNING_RATE}, received ${MIN_LEARNING_RATE}`);
+    const warmup = Math.min(WARMUP_STEPS, steps);
+    if (step <= warmup)
+        return LEARNING_RATE * step / warmup;
+    if (step >= steps)
+        return MIN_LEARNING_RATE;
+    const progress = (step - warmup) / (steps - warmup);
+    const cosine = 0.5 * (1 + Math.cos(Math.PI * progress));
+    return MIN_LEARNING_RATE + cosine * (LEARNING_RATE - MIN_LEARNING_RATE);
+}
 
 function readSteps(): number {
     const raw = process.argv[2];
@@ -220,7 +243,8 @@ export async function trainGpt2(dataset: Gpt2Dataset): Promise<void> {
     const hellaswagSample = hellaswag === null ? null : hellaswag.slice(0, HELLASWAG_MONITOR_EXAMPLES);
     const metrics = MONITOR ? await MetricsLog.open(join(dataset.logs, "metrics.csv"), resumed) : null;
     model.train();
-    console.log(`${dataset.name}  GPT-2  vocab ${VOCAB}  block ${BLOCK_SIZE}  batch ${BATCH_SIZE}  steps ${steps}`);
+    const warmup = Math.min(WARMUP_STEPS, steps);
+    console.log(`${dataset.name}  GPT-2  vocab ${VOCAB}  block ${BLOCK_SIZE}  batch ${BATCH_SIZE}  steps ${steps}  lr ${LEARNING_RATE}  warmup ${warmup}  min lr ${MIN_LEARNING_RATE}`);
     const writeCheckpoint = (step: number) => saveCheckpoint({
         root: dataset.checkpoints,
         step,
@@ -284,11 +308,14 @@ export async function trainGpt2(dataset: Gpt2Dataset): Promise<void> {
             await writeCheckpoint(0);
             console.log("checkpoint step 0");
         }
-        if (MONITOR && !resumed)
+        if (MONITOR && !resumed) {
+            optim.lr = learningRateAt(0, steps);
             await logRow(0, null, null);
+        }
 
         const started = performance.now();
         for (let step = startStep; step <= steps; step++) {
+            optim.lr = learningRateAt(step, steps);
             const stepStarted = performance.now();
             const lossValue = await tensorScope(() => {
                 optim.zeroGrad();
@@ -300,7 +327,7 @@ export async function trainGpt2(dataset: Gpt2Dataset): Promise<void> {
                 return loss.itemAsync();
             });
             const stepTimeMs = performance.now() - stepStarted;
-            console.log(`step ${step}  loss ${lossValue.toFixed(4)}`);
+            console.log(`step ${step}  loss ${lossValue.toFixed(4)}  lr ${optim.lr.toExponential(2)}`);
 
             if (MONITOR && shouldLogMetrics(step, steps, MONITOR_EVERY))
                 await logRow(step, lossValue, stepTimeMs);

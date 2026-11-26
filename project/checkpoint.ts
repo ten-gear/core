@@ -25,6 +25,8 @@ export type CheckpointModelConfig = {
 
 export type CheckpointHyperparameters = {
     learningRate: number;
+    warmupSteps: number;
+    minLearningRate: number;
     beta1: number;
     beta2: number;
     eps: number;
@@ -457,6 +459,8 @@ function readModelConfig(value: Record<string, unknown>): CheckpointModelConfig 
 function readHyperparameters(value: Record<string, unknown>): CheckpointHyperparameters {
     return {
         learningRate: readFinite(value, "learningRate", "hyperparameters"),
+        warmupSteps: readFinite(value, "warmupSteps", "hyperparameters"),
+        minLearningRate: readFinite(value, "minLearningRate", "hyperparameters"),
         beta1: readFinite(value, "beta1", "hyperparameters"),
         beta2: readFinite(value, "beta2", "hyperparameters"),
         eps: readFinite(value, "eps", "hyperparameters"),
