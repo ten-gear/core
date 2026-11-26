@@ -110,18 +110,26 @@ async function scoreGroup(
         }
     }
 
+    const scored = positions.length;
+    const scoredWidth = hellaswagBucketCount(scored);
+    const padIndex = positions[0]!;
+    while (positions.length < scoredWidth) {
+        positions.push(padIndex);
+        targets.push(0);
+    }
+
     const nll = await tensorScope(() => {
         const hidden = model.hidden(idsToTensor(input, [batch, time])).tocontiguous();
         const shape = hidden.shape();
         if (shape.length !== 3 || shape[0] !== batch || shape[1] !== time)
             throw new Error(`HellaSwag hidden state has shape ${shape.join("x")}, expected ${batch}x${time}xwidth`);
-        const picked = hidden.view(batch * time, shape[2]!).embedding(idsToTensor(Float32Array.from(positions), [positions.length]));
+        const picked = hidden.view(batch * time, shape[2]!).embedding(idsToTensor(Float32Array.from(positions), [scoredWidth]));
         const logits = model.head.forward(picked);
-        const losses = logsoftmax(logits, -1).gather(idsToTensor(Float32Array.from(targets), [targets.length]).view(targets.length, 1), 1).neg();
+        const losses = logsoftmax(logits, -1).gather(idsToTensor(Float32Array.from(targets), [scoredWidth]).view(scoredWidth, 1), 1).neg();
         return losses.toFloat32().then((values) => Float32Array.from(values));
     });
-    if (nll.length !== positions.length)
-        throw new Error(`HellaSwag loss has ${nll.length} values, expected ${positions.length}`);
+    if (nll.length !== scoredWidth)
+        throw new Error(`HellaSwag loss has ${nll.length} values, expected ${scoredWidth}`);
 
     const means: number[][] = [];
     let offset = 0;
@@ -136,9 +144,22 @@ async function scoreGroup(
         }
         means.push(rowMeans);
     }
-    if (offset !== nll.length)
-        throw new Error(`HellaSwag scored ${offset} tokens, expected ${nll.length}`);
+    if (offset !== scored)
+        throw new Error(`HellaSwag scored ${offset} tokens, expected ${scored}`);
     return means;
+}
+
+function powerOfTwoAtLeast(size: number): number {
+    let bucket = 16;
+    while (bucket < size)
+        bucket *= 2;
+    return bucket;
+}
+
+export function hellaswagBucketCount(count: number): number {
+    if (!Number.isInteger(count) || count < 1)
+        throw new Error(`HellaSwag scored-token count must be a positive integer, received ${count}`);
+    return powerOfTwoAtLeast(count);
 }
 
 export function hellaswagBucketTime(time: number, blockSize: number): number {
@@ -146,10 +167,7 @@ export function hellaswagBucketTime(time: number, blockSize: number): number {
         throw new Error(`HellaSwag time must be a positive integer, received ${time}`);
     if (!Number.isInteger(blockSize) || blockSize < time)
         throw new Error(`HellaSwag block size must be at least ${time}, received ${blockSize}`);
-    let bucket = 16;
-    while (bucket < time)
-        bucket *= 2;
-    return Math.min(bucket, blockSize);
+    return Math.min(powerOfTwoAtLeast(time), blockSize);
 }
 
 function idsToTensor(values: Float32Array, shape: number[]): Tensor {
