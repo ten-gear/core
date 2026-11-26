@@ -3,6 +3,7 @@ dist/
 demo-dist/
 project/data/
 project/checkpoints/
+project/logging/
 backend/build/
 npm/**/*.node
 npm/**/*.dll

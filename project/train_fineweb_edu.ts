@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { destroyPool } from "../src/fast_ops.js";
 import { checkpointDirectory } from "./checkpoint.js";
+import { logDirectory } from "./metrics.js";
 import { trainGpt2 } from "./gpt2_train.js";
 import { prepareFinewebEdu } from "./prepare_fineweb_edu.js";
 import { tokenPath } from "./fineweb_edu_data.js";
@@ -15,6 +16,7 @@ if (isDirectRun("train_fineweb_edu")) {
         await trainGpt2({
             name: "FineWeb-Edu",
             checkpoints: join(checkpointDirectory, "fineweb-edu"),
+            logs: join(logDirectory, "fineweb-edu"),
             prepare: prepareFinewebEdu,
             tokenPath,
         });

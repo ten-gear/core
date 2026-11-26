@@ -86,6 +86,18 @@ export function copyTokenWindow(
     }
 }
 
+export function fixedBatch(tokens: Uint16Array, batchSize: number, blockSize: number): TokenBatch {
+    if (!Number.isInteger(batchSize) || batchSize < 1)
+        throw new Error("batchSize must be a positive integer");
+    if (!Number.isInteger(blockSize) || blockSize < 1)
+        throw new Error("blockSize must be a positive integer");
+    const input = new Float32Array(batchSize * blockSize);
+    const target = new Float32Array(batchSize * blockSize);
+    for (let row = 0; row < batchSize; row++)
+        copyTokenWindow(tokens, row * blockSize, blockSize, input, target, row);
+    return { input, target };
+}
+
 export function sampleBatch(tokens: Uint16Array, batchSize: number, blockSize: number, random: Random): TokenBatch {
     if (!Number.isInteger(batchSize) || batchSize < 1)
         throw new Error("batchSize must be a positive integer");

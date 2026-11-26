@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { Model, Layer } from "../src/model.js";
 import { Tensor, tensorScope } from "../src/tensor.js";
 import { logsoftmax } from "../src/tensor_functions.js";
@@ -7,7 +8,11 @@ import { getBackendKind, initBackend } from "../src/backend/index.js";
 import { AdamW } from "../src/optim.js";
 import * as layers from "../src/layers.js";
 import { loadLatestCheckpoint, saveCheckpoint } from "./checkpoint.js";
-import { loadTokenFile, Random, sampleBatch, type TokenSplit } from "./tinystories_data.js";
+import { hellaswagAccuracy } from "./hellaswag_eval.js";
+import { hellaswagIsEncoded, loadHellaSwagExamples } from "./hellaswag_data.js";
+import { MetricsLog, peakMemoryMb, shouldLogMetrics, tensorL2, type MetricRow } from "./metrics.js";
+import { prepareHellaSwag } from "./prepare_hellaswag.js";
+import { fixedBatch, loadTokenFile, Random, sampleBatch, type TokenSplit } from "./tinystories_data.js";
 
 const WEIGHT_STD = 0.02;
 
@@ -74,10 +79,11 @@ const BETA1 = 0.9;
 const BETA2 = 0.95;
 const EPS = 1e-8;
 const WEIGHT_DECAY = 0.1;
-const VAL_EVERY = 50;
 const SAVE_CHECKPOINTS = true;
 const RESUME_CHECKPOINT = false;
 const CHECKPOINT_EVERY = 100;
+const MONITOR = true;
+const MONITOR_EVERY = 100;
 
 const checkpointSpec = {
     model: {
@@ -101,6 +107,7 @@ const checkpointSpec = {
 export type Gpt2Dataset = {
     name: string;
     checkpoints: string;
+    logs: string;
     prepare: () => Promise<void>;
     tokenPath: (split: TokenSplit) => string;
 };
@@ -126,12 +133,45 @@ async function ensureTokens(dataset: Gpt2Dataset): Promise<void> {
     await dataset.prepare();
 }
 
+async function ensureHellaswag(): Promise<void> {
+    if (await hellaswagIsEncoded()) return;
+    console.log("HellaSwag validation is missing. Downloading and encoding it.");
+    await prepareHellaSwag();
+}
+
+function windowLoss(model: GPT2, tokens: Uint16Array): Promise<number> {
+    const batch = fixedBatch(tokens, BATCH_SIZE, BLOCK_SIZE);
+    const loss = crossEntropy(
+        model.forward(idsToTensor(batch.input, BATCH_SIZE, BLOCK_SIZE)),
+        idsToTensor(batch.target, BATCH_SIZE, BLOCK_SIZE),
+    );
+    return loss.itemAsync();
+}
+
+function parameterTensors(model: GPT2, field: "value" | "grad"): Tensor[] {
+    const tensors: Tensor[] = [];
+    for (const parameter of model.parameters()) {
+        const value = parameter.value;
+        if (!(value instanceof Tensor))
+            throw new Error("parameter is not a tensor");
+        if (field === "value")
+            tensors.push(value);
+        else if (value.grad instanceof Tensor)
+            tensors.push(value.grad);
+    }
+    return tensors;
+}
+
 export async function trainGpt2(dataset: Gpt2Dataset): Promise<void> {
     const steps = readSteps();
     const seed = Math.random();
     if (SAVE_CHECKPOINTS && (!Number.isInteger(CHECKPOINT_EVERY) || CHECKPOINT_EVERY < 1))
         throw new Error(`CHECKPOINT_EVERY must be a positive integer, received ${CHECKPOINT_EVERY}`);
+    if (MONITOR && (!Number.isInteger(MONITOR_EVERY) || MONITOR_EVERY < 1))
+        throw new Error(`MONITOR_EVERY must be a positive integer, received ${MONITOR_EVERY}`);
     await ensureTokens(dataset);
+    if (MONITOR)
+        await ensureHellaswag();
     await initBackend({ backend: "auto" });
     console.log(`backend ${getBackendKind()}`);
     console.log(`checkpoints ${dataset.checkpoints}`);
@@ -170,6 +210,8 @@ export async function trainGpt2(dataset: Gpt2Dataset): Promise<void> {
         return;
     }
 
+    const hellaswag = MONITOR ? await loadHellaSwagExamples() : null;
+    const metrics = MONITOR ? await MetricsLog.open(join(dataset.logs, "metrics.csv"), resumed) : null;
     model.train();
     console.log(`${dataset.name}  GPT-2  vocab ${VOCAB}  block ${BLOCK_SIZE}  batch ${BATCH_SIZE}  steps ${steps}`);
     const writeCheckpoint = (step: number) => saveCheckpoint({
@@ -182,43 +224,89 @@ export async function trainGpt2(dataset: Gpt2Dataset): Promise<void> {
         modelConfig: checkpointSpec.model,
         hyperparameters: checkpointSpec.hyperparameters,
     });
-    if (SAVE_CHECKPOINTS && !resumed) {
-        await writeCheckpoint(0);
-        console.log("checkpoint step 0");
-    }
 
-    const started = performance.now();
-    for (let step = startStep; step <= steps; step++) {
-        const lossValue = await tensorScope(() => {
-            optim.zeroGrad();
-            const batch = sampleBatch(trainTokens, BATCH_SIZE, BLOCK_SIZE, rng);
-            const logits = model.forward(idsToTensor(batch.input, BATCH_SIZE, BLOCK_SIZE));
-            const loss = crossEntropy(logits, idsToTensor(batch.target, BATCH_SIZE, BLOCK_SIZE));
-            loss.backward();
-            optim.step();
-            return loss.itemAsync();
-        });
-        console.log(`step ${step}  loss ${lossValue.toFixed(4)}`);
-
-        if (step % VAL_EVERY === 0) {
-            model.eval();
-            const val = await tensorScope(() => {
-                const batch = sampleBatch(validTokens, BATCH_SIZE, BLOCK_SIZE, rng);
-                const loss = crossEntropy(
+    const logRow = async (step: number, trainLoss: number | null, stepTimeMs: number | null): Promise<void> => {
+        if (metrics === null || hellaswag === null) return;
+        let loss = trainLoss;
+        if (step === 0) {
+            model.train();
+            loss = await tensorScope(() => {
+                optim.zeroGrad();
+                const batch = fixedBatch(trainTokens, BATCH_SIZE, BLOCK_SIZE);
+                const probe = crossEntropy(
                     model.forward(idsToTensor(batch.input, BATCH_SIZE, BLOCK_SIZE)),
                     idsToTensor(batch.target, BATCH_SIZE, BLOCK_SIZE),
                 );
+                probe.backward();
+                return probe.itemAsync();
+            });
+        }
+        if (loss === null)
+            throw new Error("training loss is missing");
+        const gradNorm = await tensorL2(parameterTensors(model, "grad"));
+        const weightNorm = await tensorL2(parameterTensors(model, "value"));
+        if (step === 0)
+            optim.zeroGrad();
+        model.eval();
+        const valLoss = await tensorScope(() => windowLoss(model, validTokens));
+        const accuracy = await hellaswagAccuracy(model, hellaswag, BLOCK_SIZE);
+        model.train();
+        const stepTokens = BATCH_SIZE * BLOCK_SIZE;
+        const row: MetricRow = {
+            step,
+            trainLoss: loss,
+            valLoss,
+            learningRate: optim.lr,
+            tokensSeen: step * stepTokens,
+            tokensPerSec: stepTimeMs === null || stepTimeMs === 0 ? null : stepTokens / (stepTimeMs / 1000),
+            stepTimeMs,
+            gradNorm,
+            weightNorm,
+            peakMemoryMb: peakMemoryMb(),
+            hellaswag: accuracy,
+        };
+        if (!Number.isFinite(row.trainLoss))
+            throw new Error("training loss is missing");
+        await metrics.write(row);
+        const throughput = row.tokensPerSec === null ? "" : `  tokens/s ${row.tokensPerSec.toFixed(1)}`;
+        console.log(`step ${step}  val ${valLoss.toFixed(4)}  hellaswag ${accuracy.toFixed(4)}${throughput}`);
+    };
+
+    try {
+        if (SAVE_CHECKPOINTS && !resumed) {
+            await writeCheckpoint(0);
+            console.log("checkpoint step 0");
+        }
+        if (MONITOR && !resumed)
+            await logRow(0, null, null);
+
+        const started = performance.now();
+        for (let step = startStep; step <= steps; step++) {
+            const stepStarted = performance.now();
+            const lossValue = await tensorScope(() => {
+                optim.zeroGrad();
+                const batch = sampleBatch(trainTokens, BATCH_SIZE, BLOCK_SIZE, rng);
+                const logits = model.forward(idsToTensor(batch.input, BATCH_SIZE, BLOCK_SIZE));
+                const loss = crossEntropy(logits, idsToTensor(batch.target, BATCH_SIZE, BLOCK_SIZE));
+                loss.backward();
+                optim.step();
                 return loss.itemAsync();
             });
-            model.train();
-            console.log(`step ${step}  val ${val.toFixed(4)}`);
-        }
+            const stepTimeMs = performance.now() - stepStarted;
+            console.log(`step ${step}  loss ${lossValue.toFixed(4)}`);
 
-        if (SAVE_CHECKPOINTS && step % CHECKPOINT_EVERY === 0) {
-            await writeCheckpoint(step);
-            console.log(`checkpoint step ${step}`);
+            if (MONITOR && shouldLogMetrics(step, steps, MONITOR_EVERY))
+                await logRow(step, lossValue, stepTimeMs);
+
+            if (SAVE_CHECKPOINTS && step % CHECKPOINT_EVERY === 0) {
+                await writeCheckpoint(step);
+                console.log(`checkpoint step ${step}`);
+            }
         }
+        const seconds = (performance.now() - started) / 1000;
+        console.log(`finished ${steps} steps in ${seconds.toFixed(1)}s`);
     }
-    const seconds = (performance.now() - started) / 1000;
-    console.log(`finished ${steps} steps in ${seconds.toFixed(1)}s`);
+    finally {
+        await metrics?.close();
+    }
 }
