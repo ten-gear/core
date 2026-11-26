@@ -55,10 +55,14 @@ export class GPT2 extends Model {
         this.head = new layers.Linear(nEmbd, vocab, init)
     }
 
-    forward(ids: Tensor): Tensor {
+    hidden(ids: Tensor): Tensor {
         let x = this.embed.forward(ids);
         for (const block of this.blocks) x = block.forward(x);
-        return this.head.forward(this.norm.forward(x));
+        return this.norm.forward(x);
+    }
+
+    forward(ids: Tensor): Tensor {
+        return this.head.forward(this.hidden(ids));
     }
 }
 
