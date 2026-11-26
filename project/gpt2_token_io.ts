@@ -1,7 +1,9 @@
 import { mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
+import { availableParallelism } from "node:os";
 import { dirname, join } from "node:path";
 import { spawn } from "node:child_process";
+import { Worker } from "node:worker_threads";
 import { Tiktoken } from "js-tiktoken/lite";
 import gpt2 from "js-tiktoken/ranks/gpt2";
 import { asyncBufferFromFile, parquetMetadataAsync, parquetReadObjects } from "hyparquet";
@@ -15,6 +17,7 @@ const ENCODE_CHARS = 512 * 1024;
 const TOKEN_BUFFER = 1 << 20;
 const COPY_BUFFER = 8 * 1024 * 1024;
 const ROW_WINDOW = 4096;
+const ENCODE_WORKERS = Math.min(8, Math.max(1, availableParallelism() - 1));
 
 export type ShardRecord = {
     name: string;
@@ -30,12 +33,51 @@ export type TokenMeta = {
     shards: ShardRecord[];
 };
 
+export type DocumentFormat = "fineweb-text" | "chat-messages";
+
 export type ShardSource = {
     split: TokenSplit;
     name: string;
     bytes: number;
     url: string;
-    documents(parquetPath: string): AsyncIterable<string>;
+    format: DocumentFormat;
+};
+
+export type DownloadJob = {
+    id: number;
+    url: string;
+    destination: string;
+    bytes: number;
+};
+
+export type EncodeJob = {
+    id: number;
+    format: DocumentFormat;
+    parquetPath: string;
+    binPath: string;
+    metaPath: string;
+    name: string;
+    sourceBytes: number;
+    label: string;
+};
+
+export type DownloadResult = {
+    id: number;
+    ok: true;
+} | {
+    id: number;
+    ok: false;
+    error: string;
+};
+
+export type EncodeResult = {
+    id: number;
+    ok: true;
+    record: ShardRecord;
+} | {
+    id: number;
+    ok: false;
+    error: string;
 };
 
 export function createGpt2Encoder(): Tiktoken {
@@ -190,7 +232,18 @@ async function preview(encoder: Tiktoken, bin: string): Promise<void> {
     }
 }
 
-async function encodeShard(options: {
+export async function completedShard(binPath: string, metaPath: string, name: string, sourceBytes: number): Promise<ShardRecord | undefined> {
+    const existing = await readTokenMeta(metaPath);
+    const binStat = await stat(binPath).catch(() => undefined);
+    const shard = existing?.shards[0];
+    if (existing && existing.sourceBytes === sourceBytes && existing.tokens > 0
+        && existing.shards.length === 1 && shard?.name === name && shard.bytes === sourceBytes
+        && shard.tokens === existing.tokens && binStat?.size === existing.tokens * 2)
+        return shard;
+    return undefined;
+}
+
+export async function encodeShard(options: {
     encoder: Tiktoken;
     documents: AsyncIterable<string>;
     binPath: string;
@@ -199,14 +252,10 @@ async function encodeShard(options: {
     sourceBytes: number;
     label: string;
 }): Promise<ShardRecord> {
-    const existing = await readTokenMeta(options.metaPath);
-    const binStat = await stat(options.binPath).catch(() => undefined);
-    const shard = existing?.shards[0];
-    if (existing && existing.sourceBytes === options.sourceBytes && existing.tokens > 0
-        && existing.shards.length === 1 && shard?.name === options.name && shard.bytes === options.sourceBytes
-        && shard.tokens === existing.tokens && binStat?.size === existing.tokens * 2) {
+    const existing = await completedShard(options.binPath, options.metaPath, options.name, options.sourceBytes);
+    if (existing) {
         console.log(`${options.label}: ${existing.tokens.toLocaleString()} tokens already encoded`);
-        return shard;
+        return existing;
     }
 
     const tmp = `${options.binPath}.tmp`;
@@ -378,29 +427,172 @@ export async function* readParquetRows(path: string, columns: string[]): AsyncGe
     }
 }
 
+function openWorker(script: string): Worker {
+    return new Worker(new URL(`./${script}`, import.meta.url), {
+        execArgv: process.execArgv,
+    });
+}
+
+function workerError(error: unknown): string {
+    if (error instanceof Error) return error.stack ?? error.message;
+    return String(error);
+}
+
+function shardStem(name: string): string {
+    return name.slice(0, -".parquet".length);
+}
+
+// Downloads stay on one worker. Encode workers may finish out of order; records are stored by source index.
+async function encodePending(directory: string, sources: ShardSource[], pending: number[], records: ShardRecord[]): Promise<void> {
+    const downloadWorker = openWorker("prepare_download_worker.ts");
+    const encodeWorkers = Array.from({ length: ENCODE_WORKERS }, () => openWorker("prepare_encode_worker.ts"));
+    const workers = [downloadWorker, ...encodeWorkers];
+    console.log(`download worker 1  encode workers ${ENCODE_WORKERS}`);
+    try {
+        await new Promise<void>((resolve, reject) => {
+            let settled = false;
+            let downloadBusy = false;
+            let downloadCursor = 0;
+            let encoded = 0;
+            let inflightDownload = -1;
+            const encodeQueue: number[] = [];
+            const idle = [...encodeWorkers];
+
+            const fail = (error: Error) => {
+                if (settled) return;
+                settled = true;
+                reject(error);
+            };
+            const succeed = () => {
+                if (settled) return;
+                settled = true;
+                resolve();
+            };
+
+            const pump = () => {
+                if (settled) return;
+                while (idle.length > 0 && encodeQueue.length > 0) {
+                    const worker = idle.pop()!;
+                    const index = encodeQueue.shift()!;
+                    const source = sources[index]!;
+                    const stem = shardStem(source.name);
+                    const job: EncodeJob = {
+                        id: index,
+                        format: source.format,
+                        parquetPath: join(directory, "parquet", source.name),
+                        binPath: shardBinPath(directory, stem),
+                        metaPath: shardMetaPath(directory, stem),
+                        name: stem,
+                        sourceBytes: source.bytes,
+                        label: `${source.split} ${stem}`,
+                    };
+                    worker.postMessage(job);
+                }
+                if (!downloadBusy && downloadCursor < pending.length) {
+                    downloadBusy = true;
+                    const index = pending[downloadCursor]!;
+                    downloadCursor++;
+                    inflightDownload = index;
+                    const source = sources[index]!;
+                    const job: DownloadJob = {
+                        id: index,
+                        url: source.url,
+                        destination: join(directory, "parquet", source.name),
+                        bytes: source.bytes,
+                    };
+                    downloadWorker.postMessage(job);
+                }
+            };
+
+            downloadWorker.on("message", (message: DownloadResult) => {
+                if (settled) return;
+                if (!message.ok) {
+                    fail(new Error(message.error));
+                    return;
+                }
+                if (message.id !== inflightDownload) {
+                    fail(new Error(`download worker finished shard ${message.id} while ${inflightDownload} was in flight`));
+                    return;
+                }
+                downloadBusy = false;
+                inflightDownload = -1;
+                encodeQueue.push(message.id);
+                pump();
+            });
+
+            for (const worker of encodeWorkers) {
+                worker.on("message", (message: EncodeResult) => {
+                    if (settled) return;
+                    if (!message.ok) {
+                        fail(new Error(message.error));
+                        return;
+                    }
+                    if (records[message.id] !== undefined) {
+                        fail(new Error(`shard ${message.id} was encoded twice`));
+                        return;
+                    }
+                    records[message.id] = message.record;
+                    encoded++;
+                    idle.push(worker);
+                    if (encoded === pending.length) succeed();
+                    else pump();
+                });
+            }
+
+            for (const worker of workers) {
+                worker.on("error", (error) => fail(error instanceof Error ? error : new Error(workerError(error))));
+                worker.on("exit", (code) => {
+                    if (!settled && code !== 0)
+                        fail(new Error(`prepare worker exited with code ${code}`));
+                });
+            }
+
+            pump();
+        });
+    }
+    finally {
+        await Promise.all(workers.map((worker) => worker.terminate()));
+    }
+}
+
 export async function installShards(directory: string, sources: ShardSource[]): Promise<void> {
     const encoder = createGpt2Encoder();
     await mkdir(directory, { recursive: true });
     const seen = new Set<string>();
-    const grouped = new Map<TokenSplit, ShardRecord[]>();
-    for (const source of sources) {
+    const records: ShardRecord[] = [];
+    const pending: number[] = [];
+    for (let index = 0; index < sources.length; index++) {
+        const source = sources[index]!;
         if (!source.name.endsWith(".parquet"))
             throw new Error(`${source.name} is not a parquet file`);
         if (seen.has(source.name))
             throw new Error(`duplicate shard ${source.name}`);
         seen.add(source.name);
-        const parquetPath = join(directory, "parquet", source.name);
-        await download(source.url, parquetPath, source.bytes);
-        const stem = source.name.slice(0, -".parquet".length);
-        const record = await encodeShard({
-            encoder,
-            documents: source.documents(parquetPath),
-            binPath: shardBinPath(directory, stem),
-            metaPath: shardMetaPath(directory, stem),
-            name: stem,
-            sourceBytes: source.bytes,
-            label: `${source.split} ${stem}`,
-        });
+        const stem = shardStem(source.name);
+        const existing = await completedShard(
+            shardBinPath(directory, stem),
+            shardMetaPath(directory, stem),
+            stem,
+            source.bytes,
+        );
+        if (existing) {
+            console.log(`${source.split} ${stem}: ${existing.tokens.toLocaleString()} tokens already encoded`);
+            records[index] = existing;
+        }
+        else {
+            pending.push(index);
+        }
+    }
+    if (pending.length > 0)
+        await encodePending(directory, sources, pending, records);
+
+    // Source order, not completion order. concatShards appends each split in this order.
+    const grouped = new Map<TokenSplit, ShardRecord[]>();
+    for (let index = 0; index < sources.length; index++) {
+        const source = sources[index]!;
+        const record = records[index];
+        if (record === undefined)
+            throw new Error(`missing encoded shard ${source.name}`);
         const list = grouped.get(source.split) ?? [];
         list.push(record);
         grouped.set(source.split, list);

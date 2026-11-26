@@ -1,4 +1,4 @@
-import { installShards, readParquetRows, type ShardSource } from "./gpt2_token_io.js";
+import { installShards, type ShardSource } from "./gpt2_token_io.js";
 import { dataDirectory } from "./fineweb_edu_data.js";
 import type { TokenSplit } from "./tinystories_data.js";
 
@@ -28,18 +28,8 @@ const SOURCES: ShardSource[] = SHARDS.map((shard) => ({
     name: shard.name,
     bytes: shard.bytes,
     url: `${ROOT}/${shard.name}`,
-    documents: finewebDocuments,
+    format: "fineweb-text",
 }));
-
-async function* finewebDocuments(path: string): AsyncGenerator<string> {
-    for await (const row of readParquetRows(path, ["text"])) {
-        const text = row.text;
-        if (text === null || text === undefined || text === "") continue;
-        if (typeof text !== "string")
-            throw new Error(`${path} text column is ${typeof text}, expected a string`);
-        yield text;
-    }
-}
 
 export async function prepareFinewebEdu(): Promise<void> {
     console.log("FineWeb-Edu sample-10BT");
