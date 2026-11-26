@@ -25,6 +25,8 @@ export {
     ReLU,
     RoPE,
     causalMask,
+    normalParameter,
     ropeFrequencies,
 } from './layers.js';
+export type { WeightInit } from './layers.js';
 export { AdamW, Optimizer, SGD, SGDMomentum } from './optim.js';

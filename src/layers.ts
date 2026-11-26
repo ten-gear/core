@@ -5,6 +5,8 @@ import { Tensor } from "./tensor.js";
 import { flashAttention, logsoftmax, maxpool2d, rope, rparam, dropout } from "./tensor_functions.js";
 import { Shape, TensorData, writeStorage } from "./tensor_data.js";
 
+export type WeightInit = (fanIn: number, shape: Shape) => Tensor;
+
 function heParameter(fanIn: number, shape: Shape): Tensor {
     const bound = Math.sqrt(6 / fanIn);
     const data = TensorData.fill(shape);
@@ -16,6 +18,28 @@ function heParameter(fanIn: number, shape: Shape): Tensor {
     const tensor = new Tensor(data);
     tensor._requiresGrad(true);
     return tensor;
+}
+
+export function normalParameter(std: number): WeightInit {
+    if (!Number.isFinite(std) || std < 0)
+        throw new Error("normalParameter expects a finite non-negative standard deviation");
+    return (_fanIn: number, shape: Shape): Tensor => {
+        const data = TensorData.fill(shape);
+        const values = new Float32Array(data.size);
+        for (let i = 0; i < values.length; i += 2) {
+            const u1 = Math.max(Math.random(), Number.MIN_VALUE);
+            const u2 = Math.random();
+            const radius = std * Math.sqrt(-2 * Math.log(u1));
+            const angle = 2 * Math.PI * u2;
+            values[i] = radius * Math.cos(angle);
+            if (i + 1 < values.length)
+                values[i + 1] = radius * Math.sin(angle);
+        }
+        writeStorage(data._storage, values);
+        const tensor = new Tensor(data);
+        tensor._requiresGrad(true);
+        return tensor;
+    };
 }
 
 function zeroParameter(shape: Shape): Tensor {
@@ -108,11 +132,11 @@ export class Linear extends Layer {
     weights: Parameter;
     bias: Parameter;
 
-    constructor(inSize: number, outSize: number) {
+    constructor(inSize: number, outSize: number, init: WeightInit = heParameter) {
         super();
         this.inSize = inSize;
         this.outSize = outSize;
-        this.weights = this.addParameter("weights", heParameter(inSize, [inSize, outSize]));
+        this.weights = this.addParameter("weights", init(inSize, [inSize, outSize]));
         this.bias = this.addParameter("bias", zeroParameter([outSize]));
     }
 
@@ -200,9 +224,12 @@ export class LogSoftmax extends Layer {
 
 export class Embedding extends Layer {
     readonly table: Parameter;
-    constructor(vocab: number, nEmbd: number) {
+    constructor(vocab: number, nEmbd: number, init?: WeightInit) {
         super();
-        this.table = this.addParameter("table", rparam([vocab, nEmbd], -0.02, 0.02));
+        const table = init === undefined
+            ? rparam([vocab, nEmbd], -0.02, 0.02)
+            : init(nEmbd, [vocab, nEmbd]);
+        this.table = this.addParameter("table", table);
         (this.table.value as Tensor)._requiresGrad(true);
     }
     forward(ids: Tensor): Tensor {
@@ -234,16 +261,23 @@ export class MHAFlashAttention extends Layer {
     readonly out: Linear;
     readonly rope: RoPE;
     readonly dropoutRate: number;
-    constructor(nEmbd: number, nHead: number, maxSeq: number, dropout = 0) {
+    constructor(
+        nEmbd: number,
+        nHead: number,
+        maxSeq: number,
+        dropout = 0,
+        init: WeightInit = heParameter,
+        outInit: WeightInit = init,
+    ) {
         super();
         if (nEmbd % nHead !== 0) throw new Error("nEmbd must divide by nHead");
         this.nHead = nHead;
         this.headDim = nEmbd / nHead;
         this.dropoutRate = dropout;
-        this.q = new Linear(nEmbd, nEmbd);
-        this.k = new Linear(nEmbd, nEmbd);
-        this.v = new Linear(nEmbd, nEmbd);
-        this.out = new Linear(nEmbd, nEmbd);
+        this.q = new Linear(nEmbd, nEmbd, init);
+        this.k = new Linear(nEmbd, nEmbd, init);
+        this.v = new Linear(nEmbd, nEmbd, init);
+        this.out = new Linear(nEmbd, nEmbd, outInit);
         this.rope = new RoPE(maxSeq, this.headDim);
     }
     forward(input: Tensor, offset = 0): Tensor {
@@ -261,10 +295,10 @@ export class MHAFlashAttention extends Layer {
 export class MLP extends Layer {
     readonly fc: Linear;
     readonly proj: Linear;
-    constructor(nEmbd: number, factor = 4) {
+    constructor(nEmbd: number, factor = 4, init: WeightInit = heParameter, projInit: WeightInit = init) {
         super();
-        this.fc = new Linear(nEmbd, factor * nEmbd);
-        this.proj = new Linear(factor * nEmbd, nEmbd)
+        this.fc = new Linear(nEmbd, factor * nEmbd, init);
+        this.proj = new Linear(factor * nEmbd, nEmbd, projInit);
     }
     forward(input: Tensor): Tensor {
         return this.proj.forward(this.fc.forward(input).gelu());
