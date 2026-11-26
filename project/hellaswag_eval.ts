@@ -80,7 +80,9 @@ async function scoreGroup(
     for (const rows of fitted)
         for (const row of rows)
             length = Math.max(length, row.tokens.length);
-    const time = length - 1;
+    // The CUDA allocator keeps every freed block, keyed by exact byte size.
+    // Rounding the length to a power of two limits that cache to a few sizes.
+    const time = hellaswagBucketTime(length - 1, blockSize);
     const batch = examples.length * ENDING_COUNT;
     const input = new Float32Array(batch * time);
     const positions: number[] = [];
@@ -137,6 +139,17 @@ async function scoreGroup(
     if (offset !== nll.length)
         throw new Error(`HellaSwag scored ${offset} tokens, expected ${nll.length}`);
     return means;
+}
+
+export function hellaswagBucketTime(time: number, blockSize: number): number {
+    if (!Number.isInteger(time) || time < 1)
+        throw new Error(`HellaSwag time must be a positive integer, received ${time}`);
+    if (!Number.isInteger(blockSize) || blockSize < time)
+        throw new Error(`HellaSwag block size must be at least ${time}, received ${blockSize}`);
+    let bucket = 16;
+    while (bucket < time)
+        bucket *= 2;
+    return Math.min(bucket, blockSize);
 }
 
 function idsToTensor(values: Float32Array, shape: number[]): Tensor {
