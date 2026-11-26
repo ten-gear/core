@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Model, Layer } from "../src/model.js";
 import { Tensor, tensorScope } from "../src/tensor.js";
@@ -88,6 +89,7 @@ const RESUME_CHECKPOINT = false;
 const CHECKPOINT_EVERY = 100;
 const MONITOR = true;
 const MONITOR_EVERY = 100;
+const HELLASWAG_MONITOR_EXAMPLES = 128;
 
 const checkpointSpec = {
     model: {
@@ -215,6 +217,7 @@ export async function trainGpt2(dataset: Gpt2Dataset): Promise<void> {
     }
 
     const hellaswag = MONITOR ? await loadHellaSwagExamples() : null;
+    const hellaswagSample = hellaswag === null ? null : hellaswag.slice(0, HELLASWAG_MONITOR_EXAMPLES);
     const metrics = MONITOR ? await MetricsLog.open(join(dataset.logs, "metrics.csv"), resumed) : null;
     model.train();
     console.log(`${dataset.name}  GPT-2  vocab ${VOCAB}  block ${BLOCK_SIZE}  batch ${BATCH_SIZE}  steps ${steps}`);
@@ -230,7 +233,7 @@ export async function trainGpt2(dataset: Gpt2Dataset): Promise<void> {
     });
 
     const logRow = async (step: number, trainLoss: number | null, stepTimeMs: number | null): Promise<void> => {
-        if (metrics === null || hellaswag === null) return;
+        if (metrics === null || hellaswagSample === null) return;
         let loss = trainLoss;
         if (step === 0) {
             model.train();
@@ -253,7 +256,7 @@ export async function trainGpt2(dataset: Gpt2Dataset): Promise<void> {
             optim.zeroGrad();
         model.eval();
         const valLoss = await tensorScope(() => windowLoss(model, validTokens));
-        const accuracy = await hellaswagAccuracy(model, hellaswag, BLOCK_SIZE);
+        const accuracy = await hellaswagAccuracy(model, hellaswagSample, BLOCK_SIZE);
         model.train();
         const stepTokens = BATCH_SIZE * BLOCK_SIZE;
         const row: MetricRow = {
@@ -273,7 +276,7 @@ export async function trainGpt2(dataset: Gpt2Dataset): Promise<void> {
             throw new Error("training loss is missing");
         await metrics.write(row);
         const throughput = row.tokensPerSec === null ? "" : `  tokens/s ${row.tokensPerSec.toFixed(1)}`;
-        console.log(`step ${step}  val ${valLoss.toFixed(4)}  hellaswag ${accuracy.toFixed(4)}${throughput}`);
+        console.log(`step ${step}  val ${valLoss.toFixed(4)}  hellaswag ${accuracy.toFixed(4)} (${hellaswagSample.length})${throughput}`);
     };
 
     try {
@@ -309,6 +312,14 @@ export async function trainGpt2(dataset: Gpt2Dataset): Promise<void> {
         }
         const seconds = (performance.now() - started) / 1000;
         console.log(`finished ${steps} steps in ${seconds.toFixed(1)}s`);
+        if (hellaswag !== null) {
+            model.eval();
+            const fullAccuracy = await hellaswagAccuracy(model, hellaswag, BLOCK_SIZE);
+            model.train();
+            await mkdir(dataset.logs, { recursive: true });
+            await writeFile(join(dataset.logs, "hellaswag-full.txt"), `${hellaswag.length} ${fullAccuracy}\n`);
+            console.log(`hellaswag full ${fullAccuracy.toFixed(4)} (${hellaswag.length} examples)`);
+        }
     }
     finally {
         await metrics?.close();

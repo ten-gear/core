@@ -11,7 +11,8 @@ import {
     type HellaSwagExample,
 } from "./hellaswag_data.js";
 
-export const HELLASWAG_EXAMPLES_PER_FORWARD = 32;
+// One training step is 4 sequences of 1024 tokens. Keep each eval forward in that range.
+export const HELLASWAG_POSITIONS_PER_FORWARD = 4 * 1024;
 
 export type HellaSwagModel = {
     parameters(): Parameter[];
@@ -37,18 +38,57 @@ export async function hellaswagEndingLosses(
     model: HellaSwagModel,
     examples: readonly HellaSwagExample[],
     blockSize: number,
+    positionsPerForward = HELLASWAG_POSITIONS_PER_FORWARD,
 ): Promise<number[][]> {
     if (examples.length === 0)
         throw new Error("HellaSwag evaluation set is empty");
+    const groups = hellaswagForwardGroups(examples, blockSize, positionsPerForward);
     return withDetachedParameters(model, async () => {
         const losses: number[][] = [];
-        for (let start = 0; start < examples.length; start += HELLASWAG_EXAMPLES_PER_FORWARD) {
-            const group = examples.slice(start, start + HELLASWAG_EXAMPLES_PER_FORWARD);
+        let completed = 0;
+        for (const group of groups) {
+            const before = completed;
             losses.push(...await scoreGroup(model, group, blockSize));
-            logHellaswagProgress(start, start + group.length, examples.length);
+            completed += group.length;
+            logHellaswagProgress(before, completed, examples.length);
         }
         return losses;
     });
+}
+
+export function hellaswagForwardGroups(
+    examples: readonly HellaSwagExample[],
+    blockSize: number,
+    positionsPerForward = HELLASWAG_POSITIONS_PER_FORWARD,
+): HellaSwagExample[][] {
+    if (!Number.isInteger(positionsPerForward) || positionsPerForward < ENDING_COUNT)
+        throw new Error(`HellaSwag positions per forward must be at least ${ENDING_COUNT}, received ${positionsPerForward}`);
+    const groups: HellaSwagExample[][] = [];
+    let group: HellaSwagExample[] = [];
+    let maxLength = 2;
+    for (const example of examples) {
+        const length = fittedLength(example, blockSize);
+        const nextLength = group.length === 0 ? length : Math.max(maxLength, length);
+        const positions = (group.length + 1) * ENDING_COUNT * (nextLength - 1);
+        if (group.length > 0 && positions > positionsPerForward) {
+            groups.push(group);
+            group = [example];
+            maxLength = length;
+            continue;
+        }
+        group.push(example);
+        maxLength = nextLength;
+    }
+    if (group.length > 0)
+        groups.push(group);
+    return groups;
+}
+
+function fittedLength(example: HellaSwagExample, blockSize: number): number {
+    let length = 2;
+    for (const ending of example.endings)
+        length = Math.max(length, fitEnding(example.context, ending, blockSize).tokens.length);
+    return length;
 }
 
 async function withDetachedParameters<T>(model: HellaSwagModel, run: () => Promise<T>): Promise<T> {
