@@ -81,7 +81,7 @@ const VAL_EVERY = 50;
 const SAVE_CHECKPOINTS = true;
 const RESUME_CHECKPOINT = false;
 const CHECKPOINT_EVERY = 100;
-const SEED = 1337;
+const SEED = Math.random();
 
 const checkpointSpec = {
     model: {

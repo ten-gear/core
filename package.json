@@ -29,6 +29,8 @@
     "typecheck": "tsc --noEmit",
     "benchmark:backend": "tsx project/benchmark_backend.ts",
     "prepare:tinystories": "tsx project/prepare_tinystories.ts",
+    "prepare:fineweb-edu": "tsx project/prepare_fineweb_edu.ts",
+    "prepare:smol-smoltalk": "tsx project/prepare_smol_smoltalk.ts",
     "train:gpt2": "tsx project/train_gpt_2.ts",
     "preview": "vite preview",
     "test": "vitest"
@@ -62,6 +64,8 @@
     "vitest": "^4.1.11"
   },
   "dependencies": {
+    "hyparquet": "^1.33.2",
+    "hyparquet-compressors": "^1.1.3",
     "js-tiktoken": "^1.0.21"
   },
   "optionalDependencies": {
